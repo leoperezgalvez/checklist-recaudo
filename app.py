@@ -1,229 +1,244 @@
 import streamlit as st
 from datetime import datetime
 
-# --- CONFIGURACIÓN CULTURAL Y LOCALIZACIÓN ---
+# --- 1. BASE DE CONOCIMIENTO REGIONAL (HARDCODED) ---
 LOCALE_CONFIG = {
     "Chile": {
         "currency": "CLP", 
-        "card_example": "Bip!, TNE", 
-        "tax": "IVA (19%)",
-        "regulator": "MTT / DTPM"
+        "card_example": "Bip! / TNE", 
+        "regulator": "DTPM / MTT",
+        "tech_note": "Estándar Mifare alto. Santiago requiere certificación DTPM estricta."
     },
     "Colombia": {
         "currency": "COP", 
-        "card_example": "Tullave, Cívica", 
-        "tax": "IVA (19%)",
-        "regulator": "MinTransporte"
+        "card_example": "TuLlave / Cívica", 
+        "regulator": "MinTransporte",
+        "tech_note": "Bogotá usa lógica compleja (Angelcom/RB). Medellín es propietaria. Alta seguridad."
     },
     "México": {
         "currency": "MXN", 
-        "card_example": "Tarjeta MI, Feria", 
-        "tax": "IVA (16%)",
-        "regulator": "Semovi"
+        "card_example": "Tarjeta MI (Movilidad Integrada)", 
+        "regulator": "Semovi",
+        "tech_note": "⚠️ ATENCIÓN: Tarjeta MI usa estándar CALYPSO. Requiere SAM específico en validador Telpo."
     },
     "Perú": {
         "currency": "PEN", 
-        "card_example": "Lima Pass, Metropolitano", 
-        "tax": "IGV (18%)",
-        "regulator": "ATU"
+        "card_example": "Lima Pass / Metropolitano", 
+        "regulator": "ATU",
+        "tech_note": "Fragmentación de operadores. Se busca integración bajo ATU."
+    },
+    "Ecuador": {
+        "currency": "USD", 
+        "card_example": "Tarjeta Ciudad (Quito) / Metrovía", 
+        "regulator": "Municipios / ANT",
+        "tech_note": "Quito es líder en ABT (Cédula/QR/Bancaria). Guayaquil es más tradicional (Stored Value)."
+    },
+    "Panamá": {
+        "currency": "USD / PAB", 
+        "card_example": "Tarjeta MetroBus / Visa / MC", 
+        "regulator": "ATTT / Metro de Panamá",
+        "tech_note": "🔥 LÍDER OPEN LOOP: El pago con tarjeta bancaria directa es el estándar esperado."
     },
     "Otro/Genérico": {
         "currency": "USD", 
-        "card_example": "Tarjeta Ciudad", 
-        "tax": "Impuestos Locales",
-        "regulator": "Autoridad de Transporte"
+        "card_example": "Tarjeta Propietaria", 
+        "regulator": "Autoridad Local",
+        "tech_note": "Validar estándar ISO 14443 A/B."
     }
 }
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Levantamiento AFC Expert", layout="wide", page_icon="🌎")
+st.set_page_config(page_title="Levantamiento AFC Latam", layout="wide", page_icon="🌎")
 
 # --- ESTILOS CSS ---
 st.markdown("""
 <style>
     .header-style { font-size:22px; color: #004d99; font-weight: bold; border-bottom: 2px solid #004d99; margin-bottom: 15px; padding-top: 10px; }
-    .warning-box { background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 10px; font-size: 14px; }
-    .critical-box { background-color: #f8d7da; border-left: 5px solid #dc3545; padding: 10px; font-size: 14px; }
-    .success-box { background-color: #d4edda; border-left: 5px solid #28a745; padding: 10px; font-size: 14px; }
+    .country-tag { background-color: #004d99; color: white; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
+    .warning-box { background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 10px; font-size: 14px; margin-bottom: 5px; }
+    .critical-box { background-color: #f8d7da; border-left: 5px solid #dc3545; padding: 10px; font-size: 14px; margin-bottom: 5px; }
+    .success-box { background-color: #d4edda; border-left: 5px solid #28a745; padding: 10px; font-size: 14px; margin-bottom: 5px; }
+    .info-box { background-color: #e2e3e5; border-left: 5px solid #383d41; padding: 10px; font-size: 14px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- INICIALIZAR ESTADO ---
+# --- ESTADO ---
 if 'data' not in st.session_state:
     st.session_state.data = {}
 if 'country' not in st.session_state:
-    st.session_state.country = "Otro/Genérico"
+    st.session_state.country = "Chile" # Default
 
-# --- SIDEBAR: CONTEXTO CULTURAL ---
+# --- BARRA LATERAL (PAÍS) ---
 with st.sidebar:
-    st.header("🌎 Configuración Regional")
-    selected_country = st.selectbox("Selecciona el País del Proyecto:", list(LOCALE_CONFIG.keys()))
+    st.title("🌎 Región del Proyecto")
+    selected_country = st.selectbox("Seleccione País:", list(LOCALE_CONFIG.keys()))
     st.session_state.country = selected_country
     
     ctx = LOCALE_CONFIG[selected_country]
-    st.info(f"""
-    **Contexto Activo:**
-    - Moneda: {ctx['currency']}
-    - Tarjeta Ref: {ctx['card_example']}
-    - Regulador Ref: {ctx['regulator']}
-    """)
+    
     st.markdown("---")
-    st.caption("v4.0 Final Stable")
+    st.markdown(f"**Moneda:** {ctx['currency']}")
+    st.markdown(f"**Referencia:** {ctx['card_example']}")
+    st.info(f"💡 **Nota Técnica País:**\n{ctx['tech_note']}")
+    st.caption("v5.0 Latam Edition")
 
-# --- LÓGICA DE NEGOCIO AVANZADA (EL CEREBRO) ---
-def analyze_project_expert(data, country_ctx):
+# --- LÓGICA DE DIAGNÓSTICO EXPERTO ---
+def analyze_project_latam(data, country):
     report = {
-        "hardware_telpo": [],
-        "platform_match": [],
-        "security_reqs": [],
-        "capex_opex_notes": [],
-        "blockers": []
+        "hardware": [],
+        "platform": [],
+        "country_alerts": [], # Alertas específicas por país
+        "blockers": [],
+        "financial_notes": []
     }
     
-    # 1. ANÁLISIS DE MEDIOS DE ACCESO Y SEGURIDAD (CRÍTICO)
-    is_stored_value = data.get("logica_tarjeta") == "Stored Value (Saldo en el Chip de la tarjeta)"
-    is_abt = data.get("logica_tarjeta") == "ABT (Saldo en la Nube)"
+    ctx = LOCALE_CONFIG[country]
+
+    # 1. ANÁLISIS DE HARDWARE (TELPO)
+    hw_model = "Telpo F6 / T10 Lite" # Base
+    if "Tarjeta Bancaria (cEMV)" in data.get("medios_pago", []):
+        hw_model = "Telpo T20 (Certificado PCI/EMV)"
+    elif "Biometría Facial" in data.get("medios_pago", []):
+        hw_model = "Telpo T20 / F6 (Binocular 3D)"
     
-    # 2. LOGICA PROVEEDOR (Masabi vs Prodata vs Custom)
-    if is_stored_value:
-        report["platform_match"].append("✅ **Opción Recomendada:** Prodata (Soporta Stored Value Nativo) o Desarrollo Propio sobre SDK Telpo.")
-        report["blockers"].append("⛔ **Incompatibilidad Masabi:** Masabi Justride NO soporta 'Stored Value' (saldo en chip). Es una plataforma 100% ABT. Si el cliente exige saldo en tarjeta, Masabi queda descartado.")
-    elif is_abt:
-        report["platform_match"].append("✅ **Opción Recomendada:** Masabi Justride (Líder en ABT/SaaS) o Prodata (Modo ABT).")
-        report["platform_match"].append("ℹ️ **Nota:** Masabi es ideal si se busca despliegue rápido en modo SaaS.")
-
-    # 3. GESTIÓN DE LLAVES Y SAM (Secure Access Module)
-    if data.get("gestion_seguridad") == "Cliente entrega las SAM (Hardware)":
-        report["hardware_telpo"].append("🔌 **Requisito Hardware:** El Validador Telpo debe tener ranuras PSAM físicas disponibles y accesibles (T20/F6 Pro).")
-        report["security_reqs"].append("El integrador deberá implementar la lógica de lectura usando las SAMs del cliente (Desafío técnico medio).")
-    elif data.get("gestion_seguridad") == "Nosotros generamos el Mapa y Llaves":
-        report["security_reqs"].append("🔐 **Requiere KMS:** Necesitamos un Sistema de Gestión de Llaves (KMS) propio o provisto por Prodata.")
-        report["capex_opex_notes"].append("CAPEX/OPEX: Considerar costo de licenciamiento de KMS o servicio de inyección de llaves.")
-
-    # 4. HARDWARE TELPO
-    if "Tarjeta Bancaria (EMV)" in data.get("medios_pago", []):
-        report["hardware_telpo"].append("💳 **Modelo:** Telpo T20 (Obligatorio por certificación PCI/EMV L1/L2).")
-    elif "Biometría" in data.get("medios_pago", []):
-        report["hardware_telpo"].append("👁️ **Modelo:** Telpo T20 o F6 (Versión Binocular 3D).")
+    # SAMs Físicas (Hardware Constraint)
+    if data.get("seguridad_sam") == "Cliente entrega SAMs Físicas":
+        report["hardware"].append(f"🔌 **{hw_model}** con ranuras PSAM Físicas habilitadas.")
+        report["country_alerts"].append("⚠️ Verificar compatibilidad de voltaje de la SAM del cliente (3V vs 5V).")
     else:
-        report["hardware_telpo"].append("🚌 **Modelo:** Telpo T10 Lite o F6 (Estándar).")
+        report["hardware"].append(f"🚌 **{hw_model}** (Configuración estándar).")
 
-    # 5. ESTRATEGIA DE SERVIDORES
-    if data.get("infraestructura") == "SaaS (Nube)":
-        report["capex_opex_notes"].append(f"Modelado OPEX: Cobro mensual por bus activo ({country_ctx['currency']}).")
+    # 2. ANÁLISIS DE PLATAFORMA (MASABI vs PRODATA)
+    # Lógica de Stored Value
+    if data.get("logica_saldo") == "Stored Value (Saldo en Tarjeta)":
+        report["platform"].append("✅ **Recomendado:** Prodata / Desarrollo Propio (Legacy).")
+        report["blockers"].append("⛔ **Masabi Incompatible:** Masabi Justride NO gestiona saldo en chip (Stored Value).")
+    elif data.get("logica_saldo") == "ABT (Saldo en Nube)":
+        report["platform"].append("✅ **Recomendado:** Masabi Justride (SaaS/Cloud).")
+        report["platform"].append("ℹ️ Opción secundaria: Prodata (Modo ABT).")
+
+    # 3. REGLAS ESPECÍFICAS POR PAÍS (CÓDIGO DURO)
+    
+    # PANAMÁ 🇵🇦
+    if country == "Panamá":
+        if "Tarjeta Bancaria (cEMV)" not in data.get("medios_pago", []):
+            report["country_alerts"].append("🇵🇦 **CRÍTICO:** Panamá tiene alta penetración de pagos Open Loop (Metro). ¿Seguro que no requieren lectura de Visa/Mastercard? Esto podría descalificarnos.")
+        if data.get("logica_saldo") == "Stored Value (Saldo en Tarjeta)":
+            report["country_alerts"].append("🇵🇦 **Observación:** Aunque MetroBus usa Stored Value, la tendencia en Panamá es ir hacia ABT completo. Sugerir migración.")
+
+    # ECUADOR 🇪🇨
+    if country == "Ecuador":
+        if "Quito" in data.get("cliente", "") or "Metro" in data.get("cliente", ""):
+            if data.get("logica_saldo") != "ABT (Saldo en Nube)":
+                report["country_alerts"].append("🇪🇨 **Alerta Quito:** El Metro de Quito opera nativamente con ABT (Cuenta Ciudadana). Ofrecer Stored Value aquí es un retroceso tecnológico.")
+    
+    # MÉXICO 🇲🇽
+    if country == "México":
+        if "Tarjeta Ciudad" in str(data.get("medios_pago", [])):
+            report["country_alerts"].append("🇲🇽 **Estándar Calypso:** La Tarjeta MI usa Calypso. Validar que el Telpo T20 incluya la licencia del stack Calypso o la SAM de Semovi.")
+
+    # CHILE 🇨🇱
+    if country == "Chile":
+        if "Santiago" in data.get("cliente", "") or "RED" in data.get("cliente", ""):
+            report["country_alerts"].append("🇨🇱 **Certificación DTPM:** Cualquier validador en Santiago requiere pasar pruebas de laboratorio DTPM (Complejidad Alta).")
+
+    # 4. INFRAESTRUCTURA & COSTOS
+    if data.get("hosting") == "On-Premise (Servidores Propios)":
+        report["financial_notes"].append("💰 CAPEX Alto: Servidores Físicos.")
+        if "Masabi" in str(report["platform"]):
+            report["blockers"].append("⛔ **Masabi:** No instala On-Premise. Conflicto de arquitectura.")
     else:
-        report["capex_opex_notes"].append("Modelado CAPEX: Compra de servidores físicos. Nota: Masabi NO ofrece instalación On-Premise.")
+        report["financial_notes"].append(f"☁️ OPEX: Cobro mensual recurrente en {ctx['currency']} o USD.")
 
     return report
 
-# --- INTERFAZ DEL FORMULARIO ---
+# --- INTERFAZ DE FORMULARIO ---
 
 st.title(f"Levantamiento AFC - {st.session_state.country}")
-st.markdown("Herramienta de Diagnóstico Técnico-Comercial para Soluciones de Recaudo.")
+st.markdown(f'<span class="country-tag">{st.session_state.country}</span>', unsafe_allow_html=True)
+st.markdown("---")
 
-with st.form("expert_form"):
+with st.form("latam_form"):
     
-    # TAB 1: OPERACIÓN
-    st.markdown('<div class="header-style">1. Operación y Flota</div>', unsafe_allow_html=True)
+    # SECCIÓN 1: CLIENTE
+    st.markdown('<div class="header-style">1. Perfil del Proyecto</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        st.session_state.data["cliente"] = st.text_input("Nombre Cliente/Licitación:")
-        st.session_state.data["flota"] = st.number_input("Tamaño de Flota:", min_value=1, help="Total de buses a equipar")
+        st.session_state.data["cliente"] = st.text_input("Nombre Cliente / Licitación:")
+        st.session_state.data["flota"] = st.number_input("Cantidad de Vehículos/Torniquetes:", min_value=1)
     with c2:
-        st.session_state.data["tipo_flota"] = st.selectbox("Tipo de Vehículo:", ["Bus Estándar", "Bus Articulado", "Minibús/Combi", "Metro/Tren"])
-        st.session_state.data["conectividad"] = st.selectbox("Conectividad:", ["Online (4G/5G)", "Offline / Batch (WiFi Patios)", "Híbrida"])
+        st.session_state.data["tipo_transporte"] = st.selectbox("Modalidad:", ["Bus Urbano", "Bus Interprovincial", "Metro/Tren", "Teleférico"])
+        st.session_state.data["hosting"] = st.radio("Infraestructura:", ["SaaS (Nube)", "On-Premise (Servidores Propios)"])
 
-    # TAB 2: EL NÚCLEO (MEDIOS DE ACCESO) - AQUÍ ESTÁ LA MAGIA NUEVA
-    st.markdown('<div class="header-style">2. Medios de Acceso y Seguridad (Crítico)</div>', unsafe_allow_html=True)
+    # SECCIÓN 2: TECNOLOGÍA DE ACCESO (CORE)
+    st.markdown('<div class="header-style">2. Medios de Acceso y Lógica</div>', unsafe_allow_html=True)
     
-    st.session_state.data["medios_pago"] = st.multiselect("Tecnologías a leer:", 
-        [f"Tarjeta Ciudad ({LOCALE_CONFIG[st.session_state.country]['card_example']})", 
-         "Tarjeta Bancaria (cEMV)", "Código QR", "Biometría Facial"])
-
-    # Pregunta de Profundidad Técnica
-    st.markdown("#### 🧠 Lógica de la Tarjeta de Transporte")
-    st.session_state.data["logica_tarjeta"] = st.radio(
-        "¿Dónde reside el saldo del usuario?",
-        ["ABT (Saldo en la Nube)", "Stored Value (Saldo en el Chip de la tarjeta)"],
-        help="ABT = Masabi/Prodata Cloud. Stored Value = Modelo tradicional (Mifare Desfire/Classic)."
-    )
-
-    if "Tarjeta Ciudad" in str(st.session_state.data["medios_pago"]):
-        st.markdown("#### 🔐 Seguridad y Mapeo (SAM)")
-        col_sec1, col_sec2 = st.columns(2)
-        with col_sec1:
-            st.session_state.data["gestion_seguridad"] = st.selectbox("¿Cómo autenticamos la tarjeta?", 
-                ["Cliente entrega las SAM (Hardware)", 
-                 "Nosotros generamos el Mapa y Llaves", 
-                 "Sin seguridad (Solo leemos UID - No recomendado)"])
-        with col_sec2:
-            st.session_state.data["formato_mapping"] = st.selectbox("¿Tenemos acceso al Mapa de Memoria?", 
-                ["Sí, nos entregan el SDK/Documentación", 
-                 "No, es caja negra (Reverse Engineering requerido)", 
-                 "Nosotros definimos el mapa nuevo"])
-
-    # TAB 3: INFRAESTRUCTURA
-    st.markdown('<div class="header-style">3. Infraestructura y Hosting</div>', unsafe_allow_html=True)
-    st.session_state.data["infraestructura"] = st.radio("Modelo de Alojamiento:", ["SaaS (Nube)", "On-Premise (Servidores Propios)"])
+    # Medios de Pago
+    opciones_pago = [
+        "Tarjeta Propietaria/Ciudad", 
+        "Tarjeta Bancaria (cEMV)", 
+        "Código QR (App)", 
+        "Código QR (Papel)", 
+        "Biometría Facial"
+    ]
+    st.session_state.data["medios_pago"] = st.multiselect("¿Qué debe leer el validador?", opciones_pago)
     
-    # TAB 4: RED DE CARGA Y SERVICIOS
-    st.markdown('<div class="header-style">4. Ecosistema de Recarga y Servicios</div>', unsafe_allow_html=True)
-    col_ret1, col_ret2 = st.columns(2)
-    with col_ret1:
-        st.session_state.data["retail"] = st.checkbox("¿Requiere red de carga externa (POS)?")
-        st.session_state.data["cit"] = st.checkbox("¿Requiere transporte de valores (CIT)?")
-    with col_ret2:
-        st.session_state.data["soporte"] = st.selectbox("Nivel de Soporte Requerido:", ["Solo Garantía Hardware", "Soporte Técnico N2/N3", "Operación Completa (Mesa de Ayuda)"])
+    # Lógica de Saldo (Pregunta del Millón)
+    st.markdown("#### 🧠 ¿Dónde vive el dinero?")
+    st.session_state.data["logica_saldo"] = st.radio("Arquitectura de Saldo:", 
+        ["Stored Value (Saldo en Tarjeta)", "ABT (Saldo en Nube)"],
+        help="Stored Value = Tarjeta clásica. ABT = Sistema moderno (Masabi).")
+
+    # Seguridad
+    st.markdown("#### 🔐 Gestión de Llaves (SAM)")
+    st.session_state.data["seguridad_sam"] = st.selectbox("Autenticación de Tarjetas:", 
+        ["Nosotros generamos el mapa (SDK Telpo)", "Cliente entrega SAMs Físicas", "Lectura de UID (Sin seguridad)"])
+
+    # SECCIÓN 3: SERVICIOS PERIFÉRICOS
+    st.markdown('<div class="header-style">3. Ecosistema Comercial</div>', unsafe_allow_html=True)
+    c3, c4 = st.columns(2)
+    with c3:
+        st.session_state.data["retail_pos"] = st.checkbox("¿Requiere POS de Recarga (Telpo TPS900)?")
+    with c4:
+        st.session_state.data["mesa_ayuda"] = st.checkbox("¿Requiere Mesa de Ayuda a Pasajeros?")
 
     submitted = st.form_submit_button("Generar Diagnóstico Experto")
 
-# --- REPORTE DE SALIDA ---
+# --- VISUALIZACIÓN DE RESULTADOS ---
+
 if submitted:
-    ctx = LOCALE_CONFIG[st.session_state.country]
-    analisis = analyze_project_expert(st.session_state.data, ctx)
+    analisis = analyze_project_latam(st.session_state.data, st.session_state.country)
     
     st.divider()
-    st.header(f"📊 Diagnóstico Preliminar: {st.session_state.data['cliente']}")
-    st.caption(f"Configuración Regional: {st.session_state.country} | Moneda Base: {ctx['currency']}")
-
-    # 1. ALERTA DE BLOQUEO (CRUCIAL)
-    if analisis["blockers"]:
-        for blocker in analisis["blockers"]:
-            st.markdown(f'<div class="critical-box">{blocker}</div>', unsafe_allow_html=True)
-            st.write("") # Espacio
-
-    # 2. COLUMNAS DE RECOMENDACIÓN
-    col_res1, col_res2, col_res3 = st.columns(3)
-
-    with col_res1:
-        st.subheader("🛠️ Hardware (Telpo)")
-        for item in analisis["hardware_telpo"]:
-            st.markdown(f"- {item}")
-        if st.session_state.data["retail"]:
-            st.markdown("- **Retail:** POS Telpo TPS900 (Android).")
-
-    with col_res2:
-        st.subheader("☁️ Plataforma")
-        for item in analisis["platform_match"]:
-            st.markdown(f"- {item}")
-        st.caption(f"Modelo: {st.session_state.data['infraestructura']}")
-
-    with col_res3:
-        st.subheader("🔐 Seguridad & SAM")
-        if not analisis["security_reqs"]:
-            st.write("Estándar / No especificado.")
-        for item in analisis["security_reqs"]:
-            st.warning(item)
-
-    # 3. NOTAS FINANCIERAS
-    st.markdown("---")
-    st.subheader("💰 Consideraciones de Costo (CAPEX/OPEX)")
-    for note in analisis["capex_opex_notes"]:
-        st.info(note)
+    st.header("📊 Diagnóstico Preliminar")
     
-    if st.session_state.data["cit"]:
-        st.error(f"⚠️ **ALERTA OPEX:** El servicio de transporte de valores (CIT) en {st.session_state.country} es de alto costo y riesgo. Intentar derivar al cliente.")
+    # 1. ALERTAS CRÍTICAS (BLOCKERS)
+    if analisis["blockers"]:
+        st.subheader("⛔ Bloqueos de Arquitectura")
+        for err in analisis["blockers"]:
+            st.markdown(f'<div class="critical-box">{err}</div>', unsafe_allow_html=True)
 
-    # 4. JSON RAW
-    with st.expander("Ver Datos Crudos del Levantamiento"):
+    # 2. ALERTAS PAÍS (NUEVO)
+    if analisis["country_alerts"]:
+        st.subheader(f"🌍 Alertas Específicas: {st.session_state.country}")
+        for alert in analisis["country_alerts"]:
+            st.markdown(f'<div class="info-box">{alert}</div>', unsafe_allow_html=True)
+
+    # 3. RECOMENDACIONES
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.subheader("🛠️ Hardware Sugerido")
+        for h in analisis["hardware"]:
+            st.markdown(h)
+        if st.session_state.data["retail_pos"]:
+            st.markdown("- 🏪 **POS:** Telpo TPS900 (Android) para red de carga.")
+
+    with col_b:
+        st.subheader("☁️ Plataforma")
+        for p in analisis["platform"]:
+            st.markdown(p)
+    
+    # 4. JSON
+    with st.expander("Ver Datos Crudos (Para Copiar a Correo)"):
         st.json(st.session_state.data)
