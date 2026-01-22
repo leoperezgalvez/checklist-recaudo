@@ -1,193 +1,173 @@
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
-# --- Configuración de la Página ---
-st.set_page_config(page_title="Configurador de Sistema de Recaudo", layout="centered")
+# --- Configuración Visual ---
+st.set_page_config(page_title="Levantamiento AFC Pro", layout="wide", page_icon="🚌")
 
-# --- Estado de la Sesión (Base de datos temporal en memoria) ---
-if 'step' not in st.session_state:
-    st.session_state.step = 0
-if 'answers' not in st.session_state:
-    st.session_state.answers = {}
+# --- CSS para estilizar ---
+st.markdown("""
+<style>
+    .big-font { font-size:20px !important; font-weight: bold; }
+    .tip-box { background-color: #f0f2f6; border-left: 5px solid #ff4b4b; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+    .success-box { background-color: #d4edda; border-left: 5px solid #28a745; padding: 15px; border-radius: 5px; }
+</style>
+""", unsafe_allow_html=True)
 
-# --- Definición de las Preguntas ---
-questions = [
-    # Sección 1: Flota y Operación
-    {
-        "id": "fleet_size",
-        "section": "1. Flota y Operación",
-        "question": "¿Cuál es el tamaño aproximado de la flota a equipar?",
-        "type": "radio",
-        "options": ["1 - 50 buses", "51 - 200 buses", "Más de 200 buses", "Por definir"]
-    },
-    {
-        "id": "connectivity",
-        "section": "1. Flota y Operación",
-        "question": "¿Cómo es la conectividad en la ruta?",
-        "type": "radio",
-        "options": ["4G/5G Estable (Online)", "Intermitente / Zonas muertas", "Solo WiFi en patios (Offline)", "No sé"]
-    },
-    # Sección 2: Política Tarifaria
-    {
-        "id": "fare_model",
-        "section": "2. Política Tarifaria",
-        "question": "¿Cuál es el modelo de cobro principal?",
-        "type": "radio",
-        "options": ["Tarifa Plana (Monto fijo)", "Por Distancia (GPS/Secciones)", "Por Tiempo", "Mixto / Complejo"]
-    },
-    # Sección 3: Tecnología y Pagos
-    {
-        "id": "payment_methods",
-        "section": "3. Medios de Pago",
-        "question": "¿Qué medios de pago deben aceptar los validadores? (Seleccione todos los que apliquen)",
-        "type": "multiselect",
-        "options": ["Tarjeta Cerrada (Mifare/Desfire)", "Código QR (Celular/Papel)", "Tarjeta Bancaria (EMV Contactless)", "Biometría Facial"]
-    },
-    # Sección 4: Control y Auditoría
-    {
-        "id": "apc_need",
-        "section": "4. Control de Evasión (APC)",
-        "question": "¿Requieren conteo automático de pasajeros para auditar la recaudación?",
-        "type": "radio",
-        "options": ["No, no es prioridad", "Sí, precisión estándar (>95%)", "Sí, alta precisión certificada (>99% - LiDAR/ToF)"]
-    },
-     # Sección 5: Software
-    {
-        "id": "software_model",
-        "section": "5. Gestión y Software",
-        "question": "¿Cómo prefieren gestionar el software?",
-        "type": "radio",
-        "options": ["SaaS (Nube, pago mensual)", "On-Premise (Servidores propios del cliente)", "Indiferente / Lo que recomienden"]
+# --- Inicializar Estado ---
+if 'data' not in st.session_state:
+    st.session_state.data = {}
+if 'submitted' not in st.session_state:
+    st.session_state.submitted = False
+
+# --- Funciones de Lógica de Proveedores ---
+def analyze_requirements(data):
+    recommendations = {
+        "hardware_telpo": [],
+        "platform_strategy": [], # Masabi / Prodata
+        "risks": []
     }
-]
-
-# --- Lógica de Recomendación ---
-def generate_recommendation(answers):
-    rec = {
-        "hardware_tier": "Estándar",
-        "validator_features": [],
-        "apc_sensor": "No requerido",
-        "software_focus": [],
-        "alert": []
-    }
-
-    # 1. Análisis de Conectividad
-    if answers.get('connectivity') in ["Intermitente / Zonas muertas", "Solo WiFi en patios (Offline)"]:
-        rec["alert"].append("⚠️ **Crítico:** Se requiere arquitectura 'Offline-First'. Los validadores deben tener alta capacidad de almacenamiento para listas negras y transacciones locales.")
     
-    # 2. Análisis de Medios de Pago (Hardware)
-    payments = answers.get('payment_methods', [])
-    if "Tarjeta Bancaria (EMV Contactless)" in payments:
-        rec["hardware_tier"] = "Premium (Certificado)"
-        rec["validator_features"].append("Certificación EMV L1/L2 & PCI (Costo Hardware +$$$)")
-    if "Código QR (Celular/Papel)" in payments:
-        rec["validator_features"].append("Lector QR dedicado de alta velocidad")
-    if "Biometría Facial" in payments:
-        rec["hardware_tier"] = "High-Performance"
-        rec["validator_features"].append("Cámara Binocular + Procesador Quad-Core para IA")
+    # 1. Análisis Hardware (Telpo Focus)
+    if "Tarjeta Bancaria (EMV/C-EMV)" in data.get("medios_pago", []):
+        recommendations["hardware_telpo"].append("Modelo Requerido: Telpo T20 o T10 (Debe tener Certificación EMV L1/L2 & PCI).")
+    elif "Código QR" in data.get("medios_pago", []):
+        recommendations["hardware_telpo"].append("Modelo Sugerido: Telpo T20 (Lector QR dedicado) o T10 Lite.")
+    else:
+        recommendations["hardware_telpo"].append("Modelo Básico: Telpo F6 o similar (Solo tarjeta cerrada Mifare).")
+        
+    if data.get("ambiente_bus") == "Extremo (Polvo, Calor, Vibración fuerte)":
+        recommendations["hardware_telpo"].append("⚠️ Accesorio: Case rugerizado IP65 y soportes con amortiguación extra.")
 
-    # 3. Análisis de Tarifas
-    if answers.get('fare_model') == "Por Distancia (GPS/Secciones)":
-        rec["software_focus"].append("Módulo de Matriz de Paradas y Geocercas")
-        rec["validator_features"].append("GPS de Alta Precisión integrado")
-        rec["alert"].append("ℹ️ **Nota:** Cobro por distancia usualmente requiere validación a la SALIDA (Check-out) o interacción del conductor.")
+    # 2. Análisis Plataforma (Masabi/Prodata Focus)
+    if data.get("modelo_tarifario") == "Account Based Ticketing (ABT) - Calculado en Nube":
+        recommendations["platform_strategy"].append("Ideal para **Masabi Justride**. Permite 'Fare Capping' (Topes diarios/semanales).")
+    elif data.get("modelo_tarifario") == "Card Based (Saldo en la tarjeta)":
+        recommendations["platform_strategy"].append("Requiere desarrollo sobre SDK de Telpo o solución legacy de Prodata. Masabi NO se recomienda para 'Card Based' puro.")
 
-    # 4. Análisis de APC (Contador de Pasajeros)
-    apc = answers.get('apc_need')
-    if "alta precisión" in str(apc):
-        rec["apc_sensor"] = "Sensor 3D Time-of-Flight (ToF) - (Ej. Streamax/Hella)"
-        rec["software_focus"].append("Módulo de Auditoría: Comparativo Recaudo vs. Pasajeros")
-    elif "estándar" in str(apc):
-        rec["apc_sensor"] = "Cámara Binocular Estándar"
+    if "Integración con Metro/Tren" in data.get("integraciones", []):
+        recommendations["platform_strategy"].append("Complejidad Alta: Se requiere definir quién es el 'Clearing House' (Cámara de compensación).")
 
-    # 5. Tamaño de Flota y Software
-    if answers.get('fleet_size') == "Más de 200 buses" and answers.get('software_model') != "SaaS (Nube, pago mensual)":
-        rec["alert"].append("🏢 Para flotas grandes, evaluar infraestructura de servidores robusta si eligen On-Premise.")
+    # 3. Riesgos
+    if data.get("conectividad") == "Mala / Zonas Muertas" and "Account Based Ticketing" in str(data.get("modelo_tarifario")):
+        recommendations["risks"].append("🔴 RIESGO ALTO: ABT requiere buena conexión. Se deben configurar listas blancas offline en el validador Telpo.")
 
-    return rec
+    return recommendations
 
-# --- Interfaz de Usuario ---
+# --- Interfaz Principal ---
 
-st.title("🚌 Asistente de Diseño AFC")
-st.markdown("Herramienta preliminar para levantamiento de requisitos de Sistema de Recaudo.")
+st.title("🚌 Herramienta de Levantamiento Técnico AFC")
+st.markdown("Generador de Requisitos para Soluciones **Telpo + Masabi/Prodata**")
+st.markdown("---")
 
-# Barra de progreso
-progress = (st.session_state.step / len(questions))
-st.progress(progress)
-
-if st.session_state.step < len(questions):
-    # Mostrar Pregunta Actual
-    q = questions[st.session_state.step]
+with st.form("survey_form"):
     
-    st.subheader(f"{q['section']}")
-    st.write(f"**{q['question']}**")
-    
-    # Renderizar input según tipo
-    answer = None
-    if q['type'] == 'radio':
-        answer = st.radio("Seleccione una opción:", q['options'], key=q['id'])
-    elif q['type'] == 'multiselect':
-        answer = st.multiselect("Seleccione opciones:", q['options'], key=q['id'])
-    
-    st.write("")
-    
-    # Botones de Navegación
-    col1, col2 = st.columns([1, 1])
+    # SECCIÓN 1: EL CLIENTE
+    st.header("1. Perfil del Cliente y Flota")
+    col1, col2 = st.columns(2)
     with col1:
-        if st.session_state.step > 0:
-            if st.button("⬅️ Anterior"):
-                st.session_state.step -= 1
-                st.rerun()
+        st.session_state.data["cliente"] = st.text_input("Nombre del Operador/Autoridad:")
+        st.session_state.data["flota_total"] = st.number_input("Cantidad Total de Vehículos:", min_value=1)
     with col2:
-        if st.button("Siguiente ➡️"):
-            # Guardar respuesta
-            st.session_state.answers[q['id']] = answer
-            # Avanzar
-            st.session_state.step += 1
-            st.rerun()
-
-else:
-    # --- Pantalla Final: Resultados ---
-    st.success("✅ Levantamiento completado")
+        st.session_state.data["tipo_vehiculo"] = st.multiselect("Tipo de Vehículos:", ["Bus Urbano (12m)", "Bus Articulado", "Minibús/Van", "Tranvía"])
+        st.session_state.data["puertas"] = st.selectbox("Configuración de Validación:", ["Solo puerta delantera (Entry only)", "Validar al entrar y salir (Check-in/Check-out)", "Torniquete en piso (Estación)"])
     
-    final_answers = st.session_state.answers
-    recommendation = generate_recommendation(final_answers)
+    with st.expander("ℹ️ Ayuda para el Vendedor (Sección 1)"):
+        st.info("""
+        * **Check-in/Check-out:** Requiere el doble de validadores (uno por puerta) o validadores de bajada específicos.
+        * **Minibús:** El espacio es reducido, quizás el Telpo T20 es muy grande y convenga un formato tablet o handheld.
+        """)
+
+    # SECCIÓN 2: INFRAESTRUCTURA
+    st.header("2. Infraestructura y Entorno")
+    col3, col4 = st.columns(2)
+    with col3:
+        st.session_state.data["conectividad"] = st.selectbox("Conectividad en Ruta:", ["4G/5G Estable", "Mala / Zonas Muertas", "Solo Wi-Fi en Patios"])
+        st.session_state.data["ambiente_bus"] = st.selectbox("Condiciones ambientales:", ["Estándar (Urbano A/C)", "Extremo (Polvo, Calor, Vibración fuerte)"])
+    with col4:
+        st.session_state.data["cableado"] = st.radio("¿Tienen cableado estructurado en el bus?", ["Sí, Ethernet/Red disponible", "No, solo corriente (12/24V)", "No se sabe"])
+        st.session_state.data["montaje"] = st.selectbox("Tipo de Tubos/Pasamanos:", ["Estándar (32-35mm)", "Delgados", "No tiene (requiere poste dedicado)"])
+
+    with st.expander("ℹ️ Ayuda para el Vendedor (Sección 2)"):
+        st.info("""
+        * **Conectividad:** Masabi funciona mejor 'Online'. Si es mala, el validador Telpo debe tener más memoria para guardar transacciones localmente.
+        * **Cableado:** Si no hay red, el validador Telpo necesitará su propia SIM Card (Datos móviles).
+        """)
+
+    # SECCIÓN 3: MODELO DE NEGOCIO (TARIFAS)
+    st.header("3. Reglas de Negocio y Tarifas")
+    st.session_state.data["modelo_tarifario"] = st.radio("Lógica Principal de Cobro:", 
+        ["Tarifa Plana (Siempre el mismo precio)", 
+         "Por Distancia (GPS o Zonas)", 
+         "Account Based Ticketing (ABT) - Calculado en Nube",
+         "Card Based (Saldo en la tarjeta)"])
+    
+    st.session_state.data["reglas_extra"] = st.multiselect("Reglas Especiales:", 
+        ["Transbordos Gratuitos/Descuento", "Fare Capping (Tope de gasto diario)", "Gratuidad (Adulto mayor/Estudiantes)", "Zonificación compleja"])
+
+    with st.expander("ℹ️ Ayuda para el Vendedor (Sección 3)"):
+        st.info("""
+        * **ABT:** Es lo que vende Masabi. La inteligencia está en la nube, no en la tarjeta. Permite usar tarjetas bancarias.
+        * **Card Based:** Es el modelo antiguo (como tarjeta Bip! o SUBE clásica). Requiere grabar el saldo en el chip de la tarjeta.
+        * **Fare Capping:** 'Viaja todo lo que quieras por $X al día'. Solo posible con ABT.
+        """)
+
+    # SECCIÓN 4: MEDIOS DE PAGO
+    st.header("4. Experiencia de Usuario (Pagos)")
+    st.session_state.data["medios_pago"] = st.multiselect("¿Qué debe leer el validador?", 
+        ["Tarjeta Ciudad (Mifare/Desfire)", "Tarjeta Bancaria (EMV/C-EMV)", "Código QR (Celular)", "Código QR (Papel)", "Reconocimiento Facial"])
+    
+    st.session_state.data["efectivo"] = st.checkbox("¿El conductor recibe dinero en efectivo?")
+
+    with st.expander("ℹ️ Ayuda para el Vendedor (Sección 4)"):
+        st.info("""
+        * **Tarjeta Bancaria:** Eleva el costo del validador Telpo (hardware seguro) y requiere pasarela de pagos (Masabi/Littlepay).
+        * **QR Papel:** Requiere un escáner Telpo con buena luz para leer papel arrugado.
+        * **Reconocimiento Facial:** Telpo tiene modelos (F6/T20) con cámaras binoculares para 'Liveness detection' (que no usen una foto para engañar).
+        """)
+
+    # SECCIÓN 5: INTEGRACIÓN
+    st.header("5. Integraciones Tecnológicas")
+    st.session_state.data["integraciones"] = st.multiselect("Sistemas a integrar:", 
+        ["SAE/AVL (Gestión de Flota existente)", "GTFS (Información de rutas)", "Integración con Metro/Tren", "ERP/SAP del cliente"])
+
+    submitted = st.form_submit_button("Generar Diagnóstico Preliminar")
+
+# --- Generación del Reporte ---
+
+if submitted:
+    st.session_state.submitted = True
+    analysis = analyze_requirements(st.session_state.data)
     
     st.divider()
-    st.header("📋 Sugerencia Preliminar de Proyecto")
-    
-    # Mostrar Alertas Críticas primero
-    if recommendation["alert"]:
-        for alert in recommendation["alert"]:
-            st.warning(alert)
-    
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        st.subheader("🛠️ Hardware Recomendado")
-        st.info(f"**Nivel de Equipo:** {recommendation['hardware_tier']}")
-        st.markdown("**Características del Validador:**")
-        if recommendation["validator_features"]:
-            for feat in recommendation["validator_features"]:
-                st.markdown(f"- {feat}")
-        else:
-            st.markdown("- Validador Estándar (Tarjeta Mifare)")
-            
-        st.markdown("**Sistema de Conteo (APC):**")
-        st.markdown(f"- {recommendation['apc_sensor']}")
+    st.header("📊 Ficha de Anteproyecto")
+    st.caption(f"Fecha: {datetime.now().strftime('%d/%m/%Y')} | Cliente: {st.session_state.data['cliente']}")
 
-    with col_b:
-        st.subheader("💻 Software y Lógica")
-        st.markdown("**Módulos Críticos:**")
-        st.markdown("- Gestión de Flota y Tarifas")
-        for sw in recommendation["software_focus"]:
-            st.markdown(f"- {sw}")
+    # Resumen Ejecutivo
+    col_res1, col_res2 = st.columns(2)
+    with col_res1:
+        st.markdown("### 🛠️ Hardware Sugerido (Telpo)")
+        if not analysis["hardware_telpo"]:
+            st.write("Configuración estándar.")
+        for item in analysis["hardware_telpo"]:
+            st.success(f"**{item}**")
             
-    # Resumen de respuestas (Input del cliente)
-    with st.expander("Ver respuestas originales del cliente"):
-        st.json(final_answers)
+    with col_res2:
+        st.markdown("### ☁️ Software & Plataforma (Masabi/Prodata)")
+        if not analysis["platform_strategy"]:
+            st.write("Dependerá de la definición final.")
+        for item in analysis["platform_strategy"]:
+            st.info(f"**{item}**")
 
-    if st.button("🔄 Iniciar Nuevo Levantamiento"):
-        st.session_state.step = 0
-        st.session_state.answers = {}
-        st.rerun()
+    # Alertas de Riesgo
+    if analysis["risks"]:
+        st.markdown("### ⚠️ Riesgos Detectados")
+        for risk in analysis["risks"]:
+            st.error(risk)
+
+    # Tabla completa de datos
+    with st.expander("Ver Levantamiento Completo (Para copiar a Propuesta)"):
+        st.json(st.session_state.data)
+
+    st.markdown("---")
+    st.markdown("**Siguientes Pasos:** Enviar este resumen al Ingeniero de Preventa para cotización formal.")
