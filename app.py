@@ -7,19 +7,20 @@ from datetime import datetime
 st.set_page_config(page_title="FCS Field Auditor Pro", page_icon="🚍", layout="wide")
 
 # --- Gestión de Estado Robusta (Persistencia) ---
-# Esta estructura es la fuente de la verdad. El PDF leerá de aquí, no de los widgets.
 if 'survey_data' not in st.session_state:
     st.session_state.survey_data = {
-        # General
+        # 1. Contexto
         "cliente": "", "ciudad": "", "flota_qty": 0,
-        # Tarifario
+        # 2. Tarifas
         "tipo_tarifa": "Plana", "beneficios": [], "transbordos": "No",
-        # Canales
-        "red_recarga": [], "canales_digitales": [], "pasarela_pago": "No definida",
-        # Operación
-        "fiscalizacion": "Manual", "webs_autoatencion": False,
-        # Técnico
-        "voltaje": "24V", "integraciones": [], "conectividad": "4G",
+        # 3. Canales
+        "red_recarga": [], "canales_digitales": [], "pasarela_pago": "No definida", "webs_autoatencion": False,
+        # 4. Operación
+        "fiscalizacion": "Manual", "integraciones": [], "conectividad": "4G", "voltaje": "24V",
+        # 5. Demanda y Negocio (NUEVO)
+        "pax_mensual": 0, "ticket_promedio": 0.0, "viajes_combinados_pct": 0,
+        "evasion_pct": 0, "fraude_conductor_pct": 0, "recaudacion_estimada": 0.0,
+        "uso_efectivo_pct": 0,
         # Riesgos calculados
         "riesgos": [] 
     }
@@ -28,7 +29,6 @@ if 'current_step' not in st.session_state:
     st.session_state.current_step = 1
 
 # --- Funciones Auxiliares ---
-
 def update_data(key, value):
     """Actualiza el diccionario maestro inmediatamente"""
     st.session_state.survey_data[key] = value
@@ -41,37 +41,45 @@ def analizar_riesgos():
     data = st.session_state.survey_data
     riesgos = []
 
-    # 1. Riesgo de Integración Compleja
-    if "ERP (SAP/Oracle)" in data.get("integraciones", []) and "Legacy (Sistemas Antiguos)" in data.get("integraciones", []):
-        riesgos.append({
-            "nivel": "ALTO", 
-            "titulo": "Integración Compleja (ERP + Legacy)",
-            "msg": "Conectar sistemas legacy con ERPs modernos suele retrasar proyectos 3-6 meses. Se requiere middleware."
-        })
-
-    # 2. Riesgo Tarifario (Hardware)
-    if data.get("tipo_tarifa") in ["Por tramo/distancia", "Zonificada (Check-in/Check-out)"]:
-        riesgos.append({
-            "nivel": "MEDIO",
-            "titulo": "Requerimiento de GPS de Alta Precisión",
-            "msg": "Las tarifas por distancia requieren validadores con GPS muy preciso y lógica compleja a bordo."
-        })
-
-    # 3. Riesgo de Canales
-    if "Recarga en efectivo a bordo" in data.get("red_recarga", []):
+    # 1. Riesgo de Evasión (Negocio)
+    if data["evasion_pct"] > 15:
         riesgos.append({
             "nivel": "CRITICO",
-            "titulo": "Manejo de Efectivo a Bordo",
-            "msg": "El recaudo moderno busca eliminar el efectivo. Mantenerlo aumenta costos operativos y riesgo de robo."
+            "titulo": "Alta Evasión Detectada (>15%)",
+            "msg": f"La evasión del {data['evasion_pct']}% hace insostenible el modelo 'Honor System'. Se recomienda instalar torniquetes (molinetes) o cámaras de conteo 3D obligatoriamente."
+        })
+
+    # 2. Riesgo de Fraude Interno (Conductor)
+    if data["fraude_conductor_pct"] > 5:
+        riesgos.append({
+            "nivel": "ALTO",
+            "titulo": "Fraude Operativo Interno",
+            "msg": "Robo hormiga detectado. Es urgente eliminar el efectivo a bordo y digitalizar el 100% del recaudo."
+        })
+
+    # 3. Riesgo de Carga Transaccional (Clearing)
+    if data["viajes_combinados_pct"] > 30:
+        riesgos.append({
+            "nivel": "MEDIO",
+            "titulo": "Alta Complejidad de Clearing",
+            "msg": f"El {data['viajes_combinados_pct']}% de viajes combinados requiere un motor de compensación (Clearing House) robusto para repartir el dinero entre operadores con precisión milimétrica."
+        })
+
+    # 4. Riesgo Técnico
+    if "Recarga en efectivo a bordo" in data.get("red_recarga", []) and data["pax_mensual"] > 500000:
+        riesgos.append({
+            "nivel": "ALTO",
+            "titulo": "Cuello de Botella Operativo",
+            "msg": "Manejar efectivo a bordo con alto volumen de pasajeros ralentiza la operación (Dwell Time) y aumenta costos de transporte de valores."
         })
 
     st.session_state.survey_data["riesgos"] = riesgos
 
-# --- Generador de PDF (Corregido) ---
+# --- Generador de PDF ---
 class PDFReport(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'FCS Auditor - Reporte de Levantamiento Integral', 0, 1, 'C')
+        self.cell(0, 10, 'FCS Auditor - Reporte de Viabilidad y Requerimientos', 0, 1, 'C')
         self.ln(5)
 
     def chapter_title(self, title):
@@ -82,17 +90,15 @@ class PDFReport(FPDF):
 
     def chapter_body(self, label, value):
         self.set_font('Arial', 'B', 10)
-        self.cell(50, 8, label + ":", 0, 0)
+        self.cell(60, 8, label + ":", 0, 0)
         self.set_font('Arial', '', 10)
         
-        # Limpieza de datos para evitar errores de codificación
         if isinstance(value, list):
             val_str = ", ".join(value) if value else "Ninguno"
         else:
             val_str = str(value)
         
         try:
-            # Reemplazar caracteres problemáticos para Latin-1
             safe_str = val_str.encode('latin-1', 'replace').decode('latin-1')
         except:
             safe_str = val_str
@@ -108,30 +114,33 @@ def generar_pdf():
     pdf.chapter_title("1. Contexto del Cliente")
     pdf.chapter_body("Cliente", data["cliente"])
     pdf.chapter_body("Ciudad", data["ciudad"])
-    pdf.chapter_body("Flota Total", data["flota_qty"])
+    pdf.chapter_body("Flota Total", f"{data['flota_qty']} unidades")
 
-    # Sección 2: Tarifas
-    pdf.chapter_title("2. Modelo de Negocio y Tarifas")
+    # Sección 2: Demanda y Negocio (NUEVO)
+    pdf.chapter_title("2. Métricas de Demanda y Negocio")
+    pdf.chapter_body("Pasajeros Mensuales", f"{data['pax_mensual']:,}".replace(",", "."))
+    pdf.chapter_body("Ticket Promedio", f"$ {data['ticket_promedio']}")
+    pdf.chapter_body("Recaudación Mensual Est.", f"$ {data['recaudacion_estimada']:,}".replace(",", "."))
+    pdf.chapter_body("Índice de Evasión", f"{data['evasion_pct']}%")
+    pdf.chapter_body("Fraude Conductor Est.", f"{data['fraude_conductor_pct']}%")
+    pdf.chapter_body("Uso de Efectivo Actual", f"{data['uso_efectivo_pct']}%")
+
+    # Sección 3: Tarifas
+    pdf.chapter_title("3. Modelo Tarifario")
     pdf.chapter_body("Tipo de Tarifa", data["tipo_tarifa"])
-    pdf.chapter_body("Política de Transbordos", data["transbordos"])
-    pdf.chapter_body("Beneficios/Subsidios", data["beneficios"])
+    pdf.chapter_body("Transbordos", data["transbordos"])
+    pdf.chapter_body("Beneficios", data["beneficios"])
 
-    # Sección 3: Canales
-    pdf.chapter_title("3. Canales de Venta y Atención")
-    pdf.chapter_body("Red de Recarga", data["red_recarga"])
-    pdf.chapter_body("Canales Digitales", data["canales_digitales"])
-    pdf.chapter_body("Web Autoatención", "Sí" if data["webs_autoatencion"] else "No")
-    
     # Sección 4: Técnico
-    pdf.chapter_title("4. Aspectos Técnicos y Operativos")
-    pdf.chapter_body("Fiscalización", data["fiscalizacion"])
+    pdf.chapter_title("4. Aspectos Técnicos")
+    pdf.chapter_body("Red de Recarga", data["red_recarga"])
     pdf.chapter_body("Integraciones", data["integraciones"])
-    pdf.chapter_body("Conectividad", data["conectividad"])
+    pdf.chapter_body("Fiscalización", data["fiscalizacion"])
 
     # Sección 5: Riesgos
     pdf.ln(5)
     pdf.set_text_color(200, 0, 0)
-    pdf.chapter_title("5. Riesgos Detectados")
+    pdf.chapter_title("5. Riesgos y Oportunidades")
     pdf.set_text_color(0, 0, 0)
     
     if not data["riesgos"]:
@@ -149,10 +158,10 @@ def generar_pdf():
 # --- INTERFAZ DE USUARIO (WIZARD) ---
 
 st.title("Sistema de Levantamiento Técnico FCS")
-st.markdown("Herramienta guiada para ejecutivos comerciales. Los datos se guardan automáticamente.")
+st.markdown("Herramienta guiada para dimensionamiento de Sistemas de Recaudo.")
 
-# Progress Bar
-pasos_totales = 5
+# Progress Bar (Ahora son 6 pasos)
+pasos_totales = 6
 st.progress(st.session_state.current_step / pasos_totales)
 
 # --- PASO 1: CONTEXTO ---
@@ -163,9 +172,7 @@ if st.session_state.current_step == 1:
     with col1:
         st.text_input("Nombre del Operador/Autoridad", 
                       value=st.session_state.survey_data["cliente"],
-                      on_change=update_data, args=("cliente", st.session_state.survey_data["cliente"]), # Hack para refrescar
                       key="w_cliente")
-        # Actualizamos manualmente al salir del widget para asegurar persistencia
         update_data("cliente", st.session_state.w_cliente)
 
     with col2:
@@ -184,25 +191,19 @@ if st.session_state.current_step == 1:
 # --- PASO 2: REGLAS DE NEGOCIO (TARIFAS) ---
 elif st.session_state.current_step == 2:
     st.header("Paso 2: Modelo Tarifario")
-    st.info("💡 **Tip Educativo:** El tipo de tarifa define la complejidad del validador. Las tarifas por distancia requieren GPS y cálculos complejos a bordo.")
-
+    
     tipo = st.selectbox("Estructura Tarifaria", 
-                 ["Plana (Mismo precio siempre)", 
-                  "Por tramo/distancia (Cobra según km recorridos)", 
-                  "Zonificada (Anillos o Zonas de color)", 
-                  "Diferenciada por horario (Punta/Valle)"],
+                 ["Plana (Mismo precio siempre)", "Por tramo/distancia", "Zonificada", "Diferenciada por horario"],
                  index=0, key="w_tipo_tarifa")
     update_data("tipo_tarifa", tipo)
 
-    transbordo = st.radio("¿Existe política de Transbordos/Integración?",
-             ["No, cada bus se paga aparte", 
-              "Sí, tarifa reducida en el segundo bus", 
-              "Sí, ventana de tiempo gratuita (ej. 60 min)"],
+    transbordo = st.radio("Política de Transbordos",
+             ["No, cada bus se paga aparte", "Sí, tarifa reducida", "Sí, ventana de tiempo gratuita"],
              key="w_transbordos")
     update_data("transbordos", transbordo)
 
-    beneficios = st.multiselect("Beneficios a Pasajeros (Subsidios)",
-                   ["Estudiantes", "Adulto Mayor", "Personas con Discapacidad", "Policía/Bomberos", "Gratuidad Total"],
+    beneficios = st.multiselect("Beneficios a Pasajeros",
+                   ["Estudiantes", "Adulto Mayor", "Discapacidad", "Fuerzas Armadas", "Gratuidad Total"],
                    default=st.session_state.survey_data["beneficios"],
                    key="w_beneficios")
     update_data("beneficios", beneficios)
@@ -213,99 +214,137 @@ elif st.session_state.current_step == 2:
 
 # --- PASO 3: CANALES DE VENTA ---
 elif st.session_state.current_step == 3:
-    st.header("Paso 3: Venta y Atención al Cliente")
-    st.info("💡 **Tip:** Entre más canales digitales, menor es el costo operativo de manejar efectivo (CIT).")
-
-    st.subheader("Red Física")
-    red = st.multiselect("¿Dónde cargan saldo los usuarios?",
-                   ["Taquillas Propias (Estaciones)", "Red de Terceros (Tiendas de barrio/Farmacias)", 
-                    "Máquinas de Autoatención (TVM)", "Recarga en efectivo a bordo (Conductor)", "Venta a bordo (Inspectores)"],
+    st.header("Paso 3: Venta y Atención")
+    
+    red = st.multiselect("Canales de Recarga Físicos",
+                   ["Taquillas Propias", "Red de Terceros (Retail)", "Máquinas TVM", "Recarga a bordo (Conductor)"],
                    default=st.session_state.survey_data["red_recarga"],
                    key="w_red_recarga")
     update_data("red_recarga", red)
 
-    st.subheader("Canales Digitales")
-    digital = st.multiselect("Tecnologías disponibles para el usuario",
-                   ["App Móvil (Recarga NFC)", "App Móvil (Código QR)", "Web de Recarga", "Chatbot (WhatsApp)"],
+    digital = st.multiselect("Canales Digitales",
+                   ["App NFC", "App QR", "Web Recarga", "Chatbot"],
                    default=st.session_state.survey_data["canales_digitales"],
                    key="w_digital")
     update_data("canales_digitales", digital)
 
-    web_auto = st.checkbox("¿Requieren Portal Web de Autoatención (Gestión de tarjetas, bloqueos, facturas)?", 
+    web_auto = st.checkbox("¿Requieren Web de Autoatención?", 
                 value=st.session_state.survey_data["webs_autoatencion"],
                 key="w_web_auto")
     update_data("webs_autoatencion", web_auto)
-
-    pasarela = st.text_input("¿Qué Pasarela de Pagos (Gateway) usan o prefieren? (Ej: Transbank, MercadoPago, Stripe)",
-                  value=st.session_state.survey_data["pasarela_pago"],
-                  key="w_pasarela")
-    update_data("pasarela_pago", pasarela)
 
     col1, col2 = st.columns([1,1])
     col1.button("⬅ Atrás", on_click=navigate, args=(-1,))
     col2.button("Siguiente ➡", on_click=navigate, args=(1,))
 
-# --- PASO 4: OPERACIÓN E INTEGRACIÓN ---
+# --- PASO 4: OPERACIÓN TÉCNICA ---
 elif st.session_state.current_step == 4:
     st.header("Paso 4: Operación Técnica")
     
-    st.subheader("Fiscalización")
-    fisc = st.radio("¿Cómo controlan la evasión?",
-             ["Manual (Ojo del conductor)", "Inspectores con POS/PDA", "Torniquetes/Molinetes", "Cámaras de conteo de pasajeros"],
+    fisc = st.radio("Método de Fiscalización",
+             ["Manual", "Inspectores con POS", "Torniquetes/Molinetes", "Cámaras conteo"],
              key="w_fiscalizacion")
     update_data("fiscalizacion", fisc)
 
-    st.subheader("Integraciones de Sistema")
-    st.warning("⚠️ Las integraciones suelen ser la causa #1 de retrasos.")
-    integ = st.multiselect("¿Con qué otros sistemas debemos conectarnos?",
-                   ["SAE/FMS (Gestión de Flota)", "Información al Pasajero (PIS)", "ERP (SAP/Oracle)", 
-                    "Legacy (Sistemas Antiguos)", "Bancos/Financieras (EMV)", "Gobierno/Regulador"],
+    integ = st.multiselect("Integraciones Requeridas",
+                   ["SAE/FMS", "PIS (Info Pasajero)", "ERP (SAP)", "Legacy", "Bancos/EMV"],
                    default=st.session_state.survey_data["integraciones"],
                    key="w_integraciones")
     update_data("integraciones", integ)
 
     col1, col2 = st.columns([1,1])
     col1.button("⬅ Atrás", on_click=navigate, args=(-1,))
+    col2.button("Siguiente ➡", on_click=navigate, args=(1,))
+
+# --- PASO 5: DEMANDA Y NEGOCIO (NUEVO) ---
+elif st.session_state.current_step == 5:
+    st.header("Paso 5: Demanda y Viabilidad Financiera")
+    st.info("📊 Estos datos son cruciales para calcular el ROI y dimensionar los servidores.")
+
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.subheader("Volumetría")
+        pax = st.number_input("Pasajeros Mensuales Estimados", min_value=0, step=1000, 
+                        value=st.session_state.survey_data["pax_mensual"], key="w_pax")
+        update_data("pax_mensual", pax)
+
+        combinados = st.slider("% de Viajes Combinados (Transbordos)", 0, 100, 
+                         st.session_state.survey_data["viajes_combinados_pct"], key="w_comb")
+        update_data("viajes_combinados_pct", combinados)
+        
+        efectivo = st.slider("% Actual de Pago en Efectivo", 0, 100, 
+                       st.session_state.survey_data["uso_efectivo_pct"], key="w_efectivo")
+        update_data("uso_efectivo_pct", efectivo)
+
+    with col_b:
+        st.subheader("Finanzas")
+        ticket = st.number_input("Valor Promedio del Pasaje (Ticket)", min_value=0.0, step=0.1, 
+                           value=float(st.session_state.survey_data["ticket_promedio"]), key="w_ticket")
+        update_data("ticket_promedio", ticket)
+
+        # Cálculo automático de recaudación
+        calc_recaudo = pax * ticket
+        recaudo = st.number_input("Recaudación Mensual Promedio (Calculada)", min_value=0.0, 
+                            value=float(calc_recaudo), help="Puedes editar este valor si la cifra real difiere de la calculada", key="w_recaudo")
+        update_data("recaudacion_estimada", recaudo)
+
+    st.markdown("---")
+    st.subheader("Fugas de Ingresos (Pérdidas)")
+    
+    c_ev, c_fr = st.columns(2)
+    with c_ev:
+        evasion = st.slider("Estimación de Evasión (Pasajeros que no pagan)", 0, 50, 
+                      st.session_state.survey_data["evasion_pct"], key="w_evasion", help="Sobre 15% es crítico")
+        update_data("evasion_pct", evasion)
+    
+    with c_fr:
+        fraude = st.slider("Estimación Fraude Interno (Conductor)", 0, 50, 
+                     st.session_state.survey_data["fraude_conductor_pct"], key="w_fraude", help="Dinero que el conductor recibe pero no marca")
+        update_data("fraude_conductor_pct", fraude)
+
+    col1, col2 = st.columns([1,1])
+    col1.button("⬅ Atrás", on_click=navigate, args=(-1,))
     col2.button("Analizar y Finalizar 🏁", on_click=navigate, args=(1,))
 
-# --- PASO 5: RESUMEN Y EXPORTACIÓN ---
-elif st.session_state.current_step == 5:
+# --- PASO 6: RESUMEN Y EXPORTACIÓN ---
+elif st.session_state.current_step == 6:
     st.header("Resultados del Levantamiento")
     
-    # Ejecutar análisis
     analizar_riesgos()
     data = st.session_state.survey_data
 
-    # Mostrar Resumen Visual
-    st.success("Levantamiento completado. Revisa los datos antes de exportar.")
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Flota", data["flota_qty"])
-    c2.metric("Tarifa", "Compleja" if data["tipo_tarifa"] != "Plana" else "Simple")
-    c3.metric("Riesgos Detectados", len(data["riesgos"]))
-
-    with st.expander("Ver Matriz de Riesgos", expanded=True):
-        if not data["riesgos"]:
-            st.write("✅ Sin riesgos críticos evidentes.")
-        for r in data["riesgos"]:
-            color = "🔴" if r["nivel"] == "CRITICO" else "🟠" if r["nivel"] == "ALTO" else "🟡"
-            st.write(f"**{color} {r['titulo']}**")
-            st.caption(r['msg'])
+    # Métricas Clave (Top Level)
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("Flota", f"{data['flota_qty']} buses")
+    kpi2.metric("Recaudo Est.", f"${data['recaudacion_estimada']:,.0f}")
+    kpi3.metric("Evasión", f"{data['evasion_pct']}%", delta_color="inverse", delta=f"{data['evasion_pct']}%")
+    kpi4.metric("Riesgos", len(data["riesgos"]), delta_color="inverse")
 
     st.divider()
 
-    col_d1, col_d2 = st.columns(2)
-    
-    # Botón JSON
-    json_str = json.dumps(data, indent=4, ensure_ascii=False)
-    col_d1.download_button("📥 Descargar JSON (Crudo)", json_str, "levantamiento.json", "application/json")
+    # Matriz de Riesgos
+    st.subheader("Diagnóstico de Riesgos y Oportunidades")
+    if not data["riesgos"]:
+        st.success("✅ El escenario técnico y de negocio es favorable.")
+    else:
+        for r in data["riesgos"]:
+            color = "🔴" if r["nivel"] == "CRITICO" else "🟠" if r["nivel"] == "ALTO" else "🟡"
+            with st.expander(f"{color} {r['titulo']} ({r['nivel']})", expanded=True):
+                st.write(r['msg'])
 
-    # Botón PDF (Ahora robusto)
+    st.divider()
+    
+    # Descargas
+    col_d1, col_d2 = st.columns(2)
+    json_str = json.dumps(data, indent=4, ensure_ascii=False)
+    col_d1.download_button("📥 Descargar Datos Crudos (JSON)", json_str, "data_campo.json", "application/json")
+
     try:
         pdf_bytes = generar_pdf()
-        col_d2.download_button("📄 Descargar Reporte PDF", pdf_bytes, "reporte_comercial.pdf", "application/pdf")
+        col_d2.download_button("📄 Descargar Reporte Ejecutivo (PDF)", pdf_bytes, "reporte_fcs.pdf", "application/pdf")
     except Exception as e:
-        st.error(f"Error generando PDF: {e}")
+        st.error(f"Error PDF: {e}")
 
     if st.button("Comenzar Nuevo Levantamiento"):
         st.session_state.clear()
