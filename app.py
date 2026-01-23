@@ -10,24 +10,40 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- Gestión del Estado (Session State) ---
+# --- Gestión del Estado y Persistencia ---
 if 'step' not in st.session_state:
     st.session_state.step = 1
 
-# Definir valores por defecto con tipos correctos
-# Corrección: tipos_vehiculos debe ser una lista vacía [], no None
-if 'tipos_vehiculos' not in st.session_state:
-    st.session_state.tipos_vehiculos = []
-
-default_keys = [
-    'cliente_nombre', 'ciudad', 'total_vehiculos', 
+# Inicialización robusta de variables
+# Esto asegura que las claves existan antes de crear los widgets
+keys_iniciales = [
+    'cliente_nombre', 'ciudad', 'tipos_vehiculos', 'total_vehiculos', 
     'puertas_articulado', 'voltaje', 'conectividad', 'tiene_diagramas',
     'tech_tarjeta', 'dueno_llaves', 'requiere_emv'
 ]
 
-for key in default_keys:
+for key in keys_iniciales:
     if key not in st.session_state:
-        st.session_state[key] = None
+        if key == 'tipos_vehiculos':
+            st.session_state[key] = []
+        else:
+            st.session_state[key] = None
+
+# --- FUNCIÓN CLAVE PARA CORREGIR EL ERROR ---
+def guardar_y_avanzar(keys_to_save):
+    """
+    Esta función 'toca' las variables en session_state.
+    Al reasignarlas (x = x), le decimos a Streamlit: 
+    "¡Hey! Estos datos son míos, no los borres aunque el widget desaparezca".
+    """
+    for key in keys_to_save:
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
+    
+    st.session_state.step += 1
+
+def retroceder():
+    st.session_state.step -= 1
 
 # --- Lógica de Negocio: Análisis de Riesgos ---
 def analizar_riesgos(data):
@@ -38,7 +54,7 @@ def analizar_riesgos(data):
         riesgos.append({
             "nivel": "CRITICO",
             "titulo": "BLOQUEO DE SEGURIDAD (SAM/LLAVES)",
-            "mensaje": "Migración imposible sin las llaves de seguridad. El cliente no es dueño de la seguridad actual. Se requiere reemplazo total de tarjetas (re-emisión) o negociación dura con proveedor actual."
+            "mensaje": "Migración imposible sin las llaves. El cliente no tiene control. Se requiere reemplazo total de tarjetas."
         })
 
     # Regla 2: Riesgo Arquitectónico (Conectividad vs EMV)
@@ -46,7 +62,7 @@ def analizar_riesgos(data):
         riesgos.append({
             "nivel": "ALTO",
             "titulo": "RIESGO DE FRAUDE EN PAGOS BANCARIOS",
-            "mensaje": "Los pagos bancarios (EMV) requieren conexión para autorización en línea o listas negras actualizadas. Se necesita arquitectura de validación offline diferida (MTT) y gestión de riesgo financiero."
+            "mensaje": "Pagos EMV requieren conexión. Se necesita arquitectura de validación offline diferida (MTT)."
         })
 
     # Regla 3: Advertencia Eléctrica
@@ -54,7 +70,7 @@ def analizar_riesgos(data):
         riesgos.append({
             "nivel": "MEDIO",
             "titulo": "ADAPTACIÓN DE POTENCIA REQUERIDA",
-            "mensaje": "Voltaje no estándar detectado. Se requieren conversores de potencia DC-DC industriales con aislamiento galvánico para proteger los validadores."
+            "mensaje": "Voltaje no estándar. Se requieren conversores DC-DC industriales con aislamiento."
         })
         
     # Regla 4: Advertencia Operativa (Bus Articulado)
@@ -62,7 +78,7 @@ def analizar_riesgos(data):
         riesgos.append({
             "nivel": "INFO",
             "titulo": "INSTALACIÓN COMPLEJA (ARTICULADOS)",
-            "mensaje": f"Se detectaron buses articulados con {data.get('puertas_articulado', 3)} puertas. Considerar cableado extendido y validadores esclavos o múltiples validadores maestros."
+            "mensaje": f"Articulados detectados ({data.get('puertas_articulado', 'N/A')} puertas). Considerar cableado extendido."
         })
 
     return riesgos
@@ -89,7 +105,6 @@ class PDFReport(FPDF):
 
     def chapter_body(self, body):
         self.set_font('Arial', '', 11)
-        # Latin-1 encoding para acentos básicos
         try:
             texto_seguro = body.encode('latin-1', 'replace').decode('latin-1')
         except:
@@ -102,7 +117,7 @@ class PDFReport(FPDF):
         if nivel == "CRITICO":
             self.set_text_color(255, 0, 0)
         elif nivel == "ALTO":
-            self.set_text_color(255, 140, 0) # Naranja oscuro
+            self.set_text_color(255, 140, 0)
         else:
             self.set_text_color(0, 0, 0)
         
@@ -115,21 +130,13 @@ class PDFReport(FPDF):
             msg_seguro = mensaje
         self.multi_cell(0, 6, msg_seguro)
         self.ln(5)
-        self.set_text_color(0, 0, 0) # Reset color
-
-# --- Funciones de Navegación ---
-def next_step():
-    st.session_state.step += 1
-
-def prev_step():
-    st.session_state.step -= 1
+        self.set_text_color(0, 0, 0)
 
 # --- Interfaz de Usuario ---
 
 st.title("📋 FCS Field Auditor")
 st.markdown("Herramienta de levantamiento técnico para Sistemas de Recaudo.")
 
-# Barra de progreso
 progress = (st.session_state.step / 4) * 100
 st.progress(int(progress))
 
@@ -143,13 +150,15 @@ if st.session_state.step == 1:
     opciones_vehiculos = ["Bus Estándar", "Bus Articulado", "Tranvía", "Metro", "Teleférico"]
     st.multiselect("Tipos de Vehículos en Flota", options=opciones_vehiculos, key="tipos_vehiculos")
     
-    # Lógica Condicional Articulado
     if st.session_state.tipos_vehiculos and "Bus Articulado" in st.session_state.tipos_vehiculos:
-        st.number_input("¿Promedio de puertas por bus articulado?", min_value=1, max_value=10, value=3, key="puertas_articulado")
+        st.number_input("¿Promedio de puertas por bus articulado?", min_value=1, value=3, key="puertas_articulado")
     
-    st.number_input("Tamaño total de la flota (cantidad de vehículos)", min_value=1, step=1, key="total_vehiculos")
+    st.number_input("Tamaño total de la flota", min_value=1, step=1, key="total_vehiculos")
 
-    st.button("Siguiente ➡", on_click=next_step)
+    # Definimos qué variables de este paso queremos "salvar"
+    keys_paso_1 = ['cliente_nombre', 'ciudad', 'tipos_vehiculos', 'total_vehiculos', 'puertas_articulado']
+    
+    st.button("Siguiente ➡", on_click=guardar_y_avanzar, args=(keys_paso_1,))
 
 
 # --- PASO 2: INFRAESTRUCTURA ---
@@ -160,11 +169,11 @@ elif st.session_state.step == 2:
     st.radio(
         "Voltaje operativo de la flota",
         options=["12V", "24V", "Otro"],
-        help="Tranvías antiguos pueden usar 750V DC. Buses eléctricos suelen tener convertidores.",
+        help="Tranvías antiguos pueden usar 750V DC.",
         key="voltaje"
     )
     
-    st.checkbox("¿El cliente posee diagramas eléctricos actualizados de los buses?", key="tiene_diagramas")
+    st.checkbox("¿El cliente posee diagramas eléctricos actualizados?", key="tiene_diagramas")
     
     st.markdown("### Comunicaciones")
     st.radio(
@@ -173,18 +182,18 @@ elif st.session_state.step == 2:
         key="conectividad"
     )
 
+    keys_paso_2 = ['voltaje', 'tiene_diagramas', 'conectividad']
+
     col1, col2 = st.columns(2)
     with col1:
-        st.button("⬅ Atrás", on_click=prev_step)
+        st.button("⬅ Atrás", on_click=retroceder)
     with col2:
-        st.button("Siguiente ➡", on_click=next_step)
+        st.button("Siguiente ➡", on_click=guardar_y_avanzar, args=(keys_paso_2,))
 
 
 # --- PASO 3: TECNOLOGÍA Y SEGURIDAD ---
 elif st.session_state.step == 3:
     st.header("Paso 3: Tecnología y Seguridad (Crítico)")
-    
-    st.info("Esta sección determina la viabilidad de la migración tecnológica.")
     
     st.radio(
         "Tecnología de Tarjeta Actual",
@@ -192,96 +201,81 @@ elif st.session_state.step == 3:
         key="tech_tarjeta"
     )
     
-    # Lógica Condicional Llaves
     if st.session_state.tech_tarjeta != "Ninguna/Papel" and st.session_state.tech_tarjeta is not None:
         st.warning("⚠️ Punto Crítico de Auditoría")
         st.radio(
-            "¿Quién custodia las llaves de seguridad (SAM/Keys/Master Key)?",
+            "¿Quién custodia las llaves de seguridad (SAM/Keys)?",
             options=["Cliente (Tiene control total)", "Proveedor Actual (Black box)", "Nadie sabe / Se perdieron"],
             key="dueno_llaves"
         )
     else:
-        # Asegurar que la variable tenga un valor neutro si no se muestra
         st.session_state.dueno_llaves = "N/A"
 
     st.markdown("---")
     st.radio(
-        "¿El proyecto requiere integración con Validadores Bancarios (EMV - Visa/Mastercard)?",
+        "¿Requiere integración con Validadores Bancarios (EMV)?",
         options=["Sí", "No"],
         key="requiere_emv"
     )
 
+    keys_paso_3 = ['tech_tarjeta', 'dueno_llaves', 'requiere_emv']
+
     col1, col2 = st.columns(2)
     with col1:
-        st.button("⬅ Atrás", on_click=prev_step)
+        st.button("⬅ Atrás", on_click=retroceder)
     with col2:
-        st.button("Analizar y Generar Reporte 🏁", on_click=next_step)
+        st.button("Analizar y Generar Reporte 🏁", on_click=guardar_y_avanzar, args=(keys_paso_3,))
 
 
 # --- PASO 4: RESULTADOS ---
 elif st.session_state.step == 4:
     st.header("Resultados de Auditoría")
     
-    # Recopilar datos
+    # Recopilar datos (Ahora sí estarán persistentes)
     data_audit = {
-        "cliente": st.session_state.cliente_nombre or "No especificado",
-        "ciudad": st.session_state.ciudad or "No especificado",
-        "flota_total": st.session_state.total_vehiculos or 0,
-        "tipos": st.session_state.tipos_vehiculos or [],
-        "voltaje": st.session_state.voltaje or "No especificado",
-        "conectividad": st.session_state.conectividad or "No especificado",
-        "tech_tarjeta": st.session_state.tech_tarjeta or "No especificado",
-        "dueno_llaves": st.session_state.dueno_llaves or "N/A",
-        "requiere_emv": st.session_state.requiere_emv or "No",
+        "cliente": st.session_state.get('cliente_nombre', "No especificado"),
+        "ciudad": st.session_state.get('ciudad', "No especificado"),
+        "flota_total": st.session_state.get('total_vehiculos', 0),
+        "tipos": st.session_state.get('tipos_vehiculos', []),
+        "voltaje": st.session_state.get('voltaje', "No especificado"),
+        "conectividad": st.session_state.get('conectividad', "No especificado"),
+        "tech_tarjeta": st.session_state.get('tech_tarjeta', "No especificado"),
+        "dueno_llaves": st.session_state.get('dueno_llaves', "N/A"),
+        "requiere_emv": st.session_state.get('requiere_emv', "No"),
         "puertas_articulado": st.session_state.get('puertas_articulado', 'N/A')
     }
 
-    # Ejecutar Análisis
     riesgos_detectados = analizar_riesgos(data_audit)
     
-    # --- Mostrar Semáforos en Pantalla ---
     if not riesgos_detectados:
-        st.success("✅ No se detectaron riesgos críticos o bloqueantes. El escenario técnico es favorable.")
+        st.success("✅ No se detectaron riesgos críticos.")
     else:
         st.write("### 🚦 Matriz de Riesgos Detectada")
         for riesgo in riesgos_detectados:
-            if riesgo['nivel'] == "CRITICO":
-                st.error(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
-            elif riesgo['nivel'] == "ALTO":
-                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
-            elif riesgo['nivel'] == "MEDIO":
-                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
-            else:
-                st.info(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
+            color = "red" if riesgo['nivel'] == "CRITICO" else "orange" if riesgo['nivel'] == "ALTO" else "blue"
+            st.markdown(f":{color}[**[{riesgo['nivel']}] {riesgo['titulo']}**]")
+            st.write(riesgo['mensaje'])
 
     st.markdown("---")
     st.subheader("Descargas")
 
-    # 1. Generar JSON
+    # JSON
     json_str = json.dumps(data_audit, indent=4, ensure_ascii=False)
     st.download_button(
         label="📥 Descargar Auditoría (JSON)",
         data=json_str,
-        file_name=f"auditoria_campo.json",
+        file_name="auditoria_campo.json",
         mime="application/json"
     )
 
-    # 2. Generar PDF
-    def create_pdf():
+    # PDF
+    try:
         pdf = PDFReport()
         pdf.add_page()
         
-        # Preparar string de tipos de vehículos (Corrección de error NoneType)
         lista_tipos = data_audit['tipos']
-        if isinstance(lista_tipos, list):
-            tipos_str = ', '.join(lista_tipos)
-        else:
-            tipos_str = str(lista_tipos)
+        tipos_str = ', '.join(lista_tipos) if isinstance(lista_tipos, list) and lista_tipos else "Ninguno seleccionado"
 
-        if not tipos_str:
-            tipos_str = "Ninguno seleccionado"
-
-        # Resumen General
         pdf.chapter_title(f"Resumen Ejecutivo: {data_audit['cliente']}")
         resumen_texto = (
             f"Ciudad: {data_audit['ciudad']}\n"
@@ -292,26 +286,20 @@ elif st.session_state.step == 4:
         )
         pdf.chapter_body(resumen_texto)
         
-        # Riesgos
         pdf.ln(5)
-        pdf.chapter_title("Análisis de Riesgos y Recomendaciones")
-        
+        pdf.chapter_title("Análisis de Riesgos")
         if not riesgos_detectados:
-            pdf.chapter_body("No se detectaron riesgos técnicos bloqueantes para la implementación.")
+            pdf.chapter_body("No se detectaron riesgos técnicos bloqueantes.")
         else:
             for r in riesgos_detectados:
                 pdf.add_risk_box(r['nivel'], r['titulo'], r['mensaje'])
-                
-        return pdf.output(dest='S').encode('latin-1', 'replace')
 
-    # Botón PDF
-    # Generamos el PDF dentro de un try/except por si acaso
-    try:
-        pdf_bytes = create_pdf()
+        pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')
+        
         st.download_button(
             label="📄 Descargar Reporte Técnico (PDF)",
             data=pdf_bytes,
-            file_name=f"reporte_tecnico.pdf",
+            file_name="reporte_tecnico.pdf",
             mime="application/pdf"
         )
     except Exception as e:
