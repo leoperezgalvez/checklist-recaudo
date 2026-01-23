@@ -11,16 +11,20 @@ st.set_page_config(
 )
 
 # --- Gestión del Estado (Session State) ---
-# Inicializamos variables para el Wizard y los datos del formulario
 if 'step' not in st.session_state:
     st.session_state.step = 1
 
-# Definir valores por defecto para evitar errores de 'KeyError'
+# Definir valores por defecto con tipos correctos
+# Corrección: tipos_vehiculos debe ser una lista vacía [], no None
+if 'tipos_vehiculos' not in st.session_state:
+    st.session_state.tipos_vehiculos = []
+
 default_keys = [
-    'cliente_nombre', 'ciudad', 'tipos_vehiculos', 'total_vehiculos', 
+    'cliente_nombre', 'ciudad', 'total_vehiculos', 
     'puertas_articulado', 'voltaje', 'conectividad', 'tiene_diagramas',
     'tech_tarjeta', 'dueno_llaves', 'requiere_emv'
 ]
+
 for key in default_keys:
     if key not in st.session_state:
         st.session_state[key] = None
@@ -54,7 +58,7 @@ def analizar_riesgos(data):
         })
         
     # Regla 4: Advertencia Operativa (Bus Articulado)
-    if data['tipos_vehiculos'] and "Bus Articulado" in data['tipos_vehiculos']:
+    if data['tipos'] and "Bus Articulado" in data['tipos']:
         riesgos.append({
             "nivel": "INFO",
             "titulo": "INSTALACIÓN COMPLEJA (ARTICULADOS)",
@@ -86,7 +90,11 @@ class PDFReport(FPDF):
     def chapter_body(self, body):
         self.set_font('Arial', '', 11)
         # Latin-1 encoding para acentos básicos
-        self.multi_cell(0, 7, body.encode('latin-1', 'replace').decode('latin-1'))
+        try:
+            texto_seguro = body.encode('latin-1', 'replace').decode('latin-1')
+        except:
+            texto_seguro = body
+        self.multi_cell(0, 7, texto_seguro)
         self.ln()
 
     def add_risk_box(self, nivel, titulo, mensaje):
@@ -101,7 +109,11 @@ class PDFReport(FPDF):
         self.cell(0, 7, f"[{nivel}] {titulo}", 0, 1)
         self.set_text_color(50, 50, 50)
         self.set_font('Arial', '', 10)
-        self.multi_cell(0, 6, mensaje.encode('latin-1', 'replace').decode('latin-1'))
+        try:
+            msg_seguro = mensaje.encode('latin-1', 'replace').decode('latin-1')
+        except:
+            msg_seguro = mensaje
+        self.multi_cell(0, 6, msg_seguro)
         self.ln(5)
         self.set_text_color(0, 0, 0) # Reset color
 
@@ -212,15 +224,15 @@ elif st.session_state.step == 4:
     
     # Recopilar datos
     data_audit = {
-        "cliente": st.session_state.cliente_nombre,
-        "ciudad": st.session_state.ciudad,
-        "flota_total": st.session_state.total_vehiculos,
-        "tipos": st.session_state.tipos_vehiculos,
-        "voltaje": st.session_state.voltaje,
-        "conectividad": st.session_state.conectividad,
-        "tech_tarjeta": st.session_state.tech_tarjeta,
-        "dueno_llaves": st.session_state.dueno_llaves,
-        "requiere_emv": st.session_state.requiere_emv,
+        "cliente": st.session_state.cliente_nombre or "No especificado",
+        "ciudad": st.session_state.ciudad or "No especificado",
+        "flota_total": st.session_state.total_vehiculos or 0,
+        "tipos": st.session_state.tipos_vehiculos or [],
+        "voltaje": st.session_state.voltaje or "No especificado",
+        "conectividad": st.session_state.conectividad or "No especificado",
+        "tech_tarjeta": st.session_state.tech_tarjeta or "No especificado",
+        "dueno_llaves": st.session_state.dueno_llaves or "N/A",
+        "requiere_emv": st.session_state.requiere_emv or "No",
         "puertas_articulado": st.session_state.get('puertas_articulado', 'N/A')
     }
 
@@ -238,7 +250,7 @@ elif st.session_state.step == 4:
             elif riesgo['nivel'] == "ALTO":
                 st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
             elif riesgo['nivel'] == "MEDIO":
-                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}") # Usamos warning para medio tambien
+                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
             else:
                 st.info(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
 
@@ -250,7 +262,7 @@ elif st.session_state.step == 4:
     st.download_button(
         label="📥 Descargar Auditoría (JSON)",
         data=json_str,
-        file_name=f"auditoria_{st.session_state.cliente_nombre}.json",
+        file_name=f"auditoria_campo.json",
         mime="application/json"
     )
 
@@ -259,12 +271,22 @@ elif st.session_state.step == 4:
         pdf = PDFReport()
         pdf.add_page()
         
+        # Preparar string de tipos de vehículos (Corrección de error NoneType)
+        lista_tipos = data_audit['tipos']
+        if isinstance(lista_tipos, list):
+            tipos_str = ', '.join(lista_tipos)
+        else:
+            tipos_str = str(lista_tipos)
+
+        if not tipos_str:
+            tipos_str = "Ninguno seleccionado"
+
         # Resumen General
         pdf.chapter_title(f"Resumen Ejecutivo: {data_audit['cliente']}")
         resumen_texto = (
             f"Ciudad: {data_audit['ciudad']}\n"
             f"Flota Total: {data_audit['flota_total']} unidades\n"
-            f"Tipos de Vehículos: {', '.join(data_audit['tipos'])}\n"
+            f"Tipos de Vehículos: {tipos_str}\n"
             f"Tecnología Actual: {data_audit['tech_tarjeta']}\n"
             f"Conectividad: {data_audit['conectividad']}"
         )
@@ -280,15 +302,19 @@ elif st.session_state.step == 4:
             for r in riesgos_detectados:
                 pdf.add_risk_box(r['nivel'], r['titulo'], r['mensaje'])
                 
-        return pdf.output(dest='S').encode('latin-1')
+        return pdf.output(dest='S').encode('latin-1', 'replace')
 
     # Botón PDF
-    pdf_bytes = create_pdf()
-    st.download_button(
-        label="📄 Descargar Reporte Técnico (PDF)",
-        data=pdf_bytes,
-        file_name=f"reporte_tecnico_{st.session_state.cliente_nombre}.pdf",
-        mime="application/pdf"
-    )
+    # Generamos el PDF dentro de un try/except por si acaso
+    try:
+        pdf_bytes = create_pdf()
+        st.download_button(
+            label="📄 Descargar Reporte Técnico (PDF)",
+            data=pdf_bytes,
+            file_name=f"reporte_tecnico.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.error(f"Error generando PDF: {e}")
     
     st.button("🔄 Nueva Auditoría", on_click=lambda: st.session_state.update(step=1))
