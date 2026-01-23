@@ -1,244 +1,294 @@
 import streamlit as st
+import json
+from fpdf import FPDF
 from datetime import datetime
 
-# --- 1. BASE DE CONOCIMIENTO REGIONAL (HARDCODED) ---
-LOCALE_CONFIG = {
-    "Chile": {
-        "currency": "CLP", 
-        "card_example": "Bip! / TNE", 
-        "regulator": "DTPM / MTT",
-        "tech_note": "Estándar Mifare alto. Santiago requiere certificación DTPM estricta."
-    },
-    "Colombia": {
-        "currency": "COP", 
-        "card_example": "TuLlave / Cívica", 
-        "regulator": "MinTransporte",
-        "tech_note": "Bogotá usa lógica compleja (Angelcom/RB). Medellín es propietaria. Alta seguridad."
-    },
-    "México": {
-        "currency": "MXN", 
-        "card_example": "Tarjeta MI (Movilidad Integrada)", 
-        "regulator": "Semovi",
-        "tech_note": "⚠️ ATENCIÓN: Tarjeta MI usa estándar CALYPSO. Requiere SAM específico en validador Telpo."
-    },
-    "Perú": {
-        "currency": "PEN", 
-        "card_example": "Lima Pass / Metropolitano", 
-        "regulator": "ATU",
-        "tech_note": "Fragmentación de operadores. Se busca integración bajo ATU."
-    },
-    "Ecuador": {
-        "currency": "USD", 
-        "card_example": "Tarjeta Ciudad (Quito) / Metrovía", 
-        "regulator": "Municipios / ANT",
-        "tech_note": "Quito es líder en ABT (Cédula/QR/Bancaria). Guayaquil es más tradicional (Stored Value)."
-    },
-    "Panamá": {
-        "currency": "USD / PAB", 
-        "card_example": "Tarjeta MetroBus / Visa / MC", 
-        "regulator": "ATTT / Metro de Panamá",
-        "tech_note": "🔥 LÍDER OPEN LOOP: El pago con tarjeta bancaria directa es el estándar esperado."
-    },
-    "Otro/Genérico": {
-        "currency": "USD", 
-        "card_example": "Tarjeta Propietaria", 
-        "regulator": "Autoridad Local",
-        "tech_note": "Validar estándar ISO 14443 A/B."
-    }
-}
+# --- Configuración de Página ---
+st.set_page_config(
+    page_title="FCS Field Auditor",
+    page_icon="🚌",
+    layout="centered"
+)
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Levantamiento AFC Latam", layout="wide", page_icon="🌎")
+# --- Gestión del Estado (Session State) ---
+# Inicializamos variables para el Wizard y los datos del formulario
+if 'step' not in st.session_state:
+    st.session_state.step = 1
 
-# --- ESTILOS CSS ---
-st.markdown("""
-<style>
-    .header-style { font-size:22px; color: #004d99; font-weight: bold; border-bottom: 2px solid #004d99; margin-bottom: 15px; padding-top: 10px; }
-    .country-tag { background-color: #004d99; color: white; padding: 5px 10px; border-radius: 5px; font-weight: bold; }
-    .warning-box { background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 10px; font-size: 14px; margin-bottom: 5px; }
-    .critical-box { background-color: #f8d7da; border-left: 5px solid #dc3545; padding: 10px; font-size: 14px; margin-bottom: 5px; }
-    .success-box { background-color: #d4edda; border-left: 5px solid #28a745; padding: 10px; font-size: 14px; margin-bottom: 5px; }
-    .info-box { background-color: #e2e3e5; border-left: 5px solid #383d41; padding: 10px; font-size: 14px; }
-</style>
-""", unsafe_allow_html=True)
+# Definir valores por defecto para evitar errores de 'KeyError'
+default_keys = [
+    'cliente_nombre', 'ciudad', 'tipos_vehiculos', 'total_vehiculos', 
+    'puertas_articulado', 'voltaje', 'conectividad', 'tiene_diagramas',
+    'tech_tarjeta', 'dueno_llaves', 'requiere_emv'
+]
+for key in default_keys:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
-# --- ESTADO ---
-if 'data' not in st.session_state:
-    st.session_state.data = {}
-if 'country' not in st.session_state:
-    st.session_state.country = "Chile" # Default
-
-# --- BARRA LATERAL (PAÍS) ---
-with st.sidebar:
-    st.title("🌎 Región del Proyecto")
-    selected_country = st.selectbox("Seleccione País:", list(LOCALE_CONFIG.keys()))
-    st.session_state.country = selected_country
+# --- Lógica de Negocio: Análisis de Riesgos ---
+def analizar_riesgos(data):
+    riesgos = []
     
-    ctx = LOCALE_CONFIG[selected_country]
+    # Regla 1: Riesgo Crítico (Vendor Lock-in / Seguridad)
+    if data['tech_tarjeta'] != "Ninguna/Papel" and data['dueno_llaves'] != "Cliente":
+        riesgos.append({
+            "nivel": "CRITICO",
+            "titulo": "BLOQUEO DE SEGURIDAD (SAM/LLAVES)",
+            "mensaje": "Migración imposible sin las llaves de seguridad. El cliente no es dueño de la seguridad actual. Se requiere reemplazo total de tarjetas (re-emisión) o negociación dura con proveedor actual."
+        })
+
+    # Regla 2: Riesgo Arquitectónico (Conectividad vs EMV)
+    if data['conectividad'] == "Mala/Offline" and data['requiere_emv'] == "Sí":
+        riesgos.append({
+            "nivel": "ALTO",
+            "titulo": "RIESGO DE FRAUDE EN PAGOS BANCARIOS",
+            "mensaje": "Los pagos bancarios (EMV) requieren conexión para autorización en línea o listas negras actualizadas. Se necesita arquitectura de validación offline diferida (MTT) y gestión de riesgo financiero."
+        })
+
+    # Regla 3: Advertencia Eléctrica
+    if data['voltaje'] == "Otro":
+        riesgos.append({
+            "nivel": "MEDIO",
+            "titulo": "ADAPTACIÓN DE POTENCIA REQUERIDA",
+            "mensaje": "Voltaje no estándar detectado. Se requieren conversores de potencia DC-DC industriales con aislamiento galvánico para proteger los validadores."
+        })
+        
+    # Regla 4: Advertencia Operativa (Bus Articulado)
+    if data['tipos_vehiculos'] and "Bus Articulado" in data['tipos_vehiculos']:
+        riesgos.append({
+            "nivel": "INFO",
+            "titulo": "INSTALACIÓN COMPLEJA (ARTICULADOS)",
+            "mensaje": f"Se detectaron buses articulados con {data.get('puertas_articulado', 3)} puertas. Considerar cableado extendido y validadores esclavos o múltiples validadores maestros."
+        })
+
+    return riesgos
+
+# --- Clase para Generación de PDF ---
+class PDFReport(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 15)
+        self.cell(0, 10, 'FCS Field Auditor - Reporte Técnico', 0, 1, 'C')
+        self.set_font('Arial', 'I', 10)
+        self.cell(0, 10, f'Fecha de Auditoría: {datetime.now().strftime("%d/%m/%Y")}', 0, 1, 'C')
+        self.ln(5)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
+
+    def chapter_title(self, title):
+        self.set_font('Arial', 'B', 12)
+        self.set_fill_color(200, 220, 255)
+        self.cell(0, 10, title, 0, 1, 'L', 1)
+        self.ln(4)
+
+    def chapter_body(self, body):
+        self.set_font('Arial', '', 11)
+        # Latin-1 encoding para acentos básicos
+        self.multi_cell(0, 7, body.encode('latin-1', 'replace').decode('latin-1'))
+        self.ln()
+
+    def add_risk_box(self, nivel, titulo, mensaje):
+        self.set_font('Arial', 'B', 11)
+        if nivel == "CRITICO":
+            self.set_text_color(255, 0, 0)
+        elif nivel == "ALTO":
+            self.set_text_color(255, 140, 0) # Naranja oscuro
+        else:
+            self.set_text_color(0, 0, 0)
+        
+        self.cell(0, 7, f"[{nivel}] {titulo}", 0, 1)
+        self.set_text_color(50, 50, 50)
+        self.set_font('Arial', '', 10)
+        self.multi_cell(0, 6, mensaje.encode('latin-1', 'replace').decode('latin-1'))
+        self.ln(5)
+        self.set_text_color(0, 0, 0) # Reset color
+
+# --- Funciones de Navegación ---
+def next_step():
+    st.session_state.step += 1
+
+def prev_step():
+    st.session_state.step -= 1
+
+# --- Interfaz de Usuario ---
+
+st.title("📋 FCS Field Auditor")
+st.markdown("Herramienta de levantamiento técnico para Sistemas de Recaudo.")
+
+# Barra de progreso
+progress = (st.session_state.step / 4) * 100
+st.progress(int(progress))
+
+# --- PASO 1: CLIENTE Y FLOTA ---
+if st.session_state.step == 1:
+    st.header("Paso 1: Cliente y Flota")
     
+    st.text_input("Nombre del Cliente", key="cliente_nombre")
+    st.text_input("Ciudad / Región", key="ciudad")
+    
+    opciones_vehiculos = ["Bus Estándar", "Bus Articulado", "Tranvía", "Metro", "Teleférico"]
+    st.multiselect("Tipos de Vehículos en Flota", options=opciones_vehiculos, key="tipos_vehiculos")
+    
+    # Lógica Condicional Articulado
+    if st.session_state.tipos_vehiculos and "Bus Articulado" in st.session_state.tipos_vehiculos:
+        st.number_input("¿Promedio de puertas por bus articulado?", min_value=1, max_value=10, value=3, key="puertas_articulado")
+    
+    st.number_input("Tamaño total de la flota (cantidad de vehículos)", min_value=1, step=1, key="total_vehiculos")
+
+    st.button("Siguiente ➡", on_click=next_step)
+
+
+# --- PASO 2: INFRAESTRUCTURA ---
+elif st.session_state.step == 2:
+    st.header("Paso 2: Infraestructura y Entorno")
+    
+    st.markdown("### Evaluación Eléctrica")
+    st.radio(
+        "Voltaje operativo de la flota",
+        options=["12V", "24V", "Otro"],
+        help="Tranvías antiguos pueden usar 750V DC. Buses eléctricos suelen tener convertidores.",
+        key="voltaje"
+    )
+    
+    st.checkbox("¿El cliente posee diagramas eléctricos actualizados de los buses?", key="tiene_diagramas")
+    
+    st.markdown("### Comunicaciones")
+    st.radio(
+        "Conectividad en Ruta (Promedio)",
+        options=["Buena - 4G/5G Estable", "Intermitente", "Mala/Offline"],
+        key="conectividad"
+    )
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button("⬅ Atrás", on_click=prev_step)
+    with col2:
+        st.button("Siguiente ➡", on_click=next_step)
+
+
+# --- PASO 3: TECNOLOGÍA Y SEGURIDAD ---
+elif st.session_state.step == 3:
+    st.header("Paso 3: Tecnología y Seguridad (Crítico)")
+    
+    st.info("Esta sección determina la viabilidad de la migración tecnológica.")
+    
+    st.radio(
+        "Tecnología de Tarjeta Actual",
+        options=["MIFARE Classic", "MIFARE DESFire", "Calypso", "Otra (FeliCa/HID)", "Ninguna/Papel"],
+        key="tech_tarjeta"
+    )
+    
+    # Lógica Condicional Llaves
+    if st.session_state.tech_tarjeta != "Ninguna/Papel" and st.session_state.tech_tarjeta is not None:
+        st.warning("⚠️ Punto Crítico de Auditoría")
+        st.radio(
+            "¿Quién custodia las llaves de seguridad (SAM/Keys/Master Key)?",
+            options=["Cliente (Tiene control total)", "Proveedor Actual (Black box)", "Nadie sabe / Se perdieron"],
+            key="dueno_llaves"
+        )
+    else:
+        # Asegurar que la variable tenga un valor neutro si no se muestra
+        st.session_state.dueno_llaves = "N/A"
+
     st.markdown("---")
-    st.markdown(f"**Moneda:** {ctx['currency']}")
-    st.markdown(f"**Referencia:** {ctx['card_example']}")
-    st.info(f"💡 **Nota Técnica País:**\n{ctx['tech_note']}")
-    st.caption("v5.0 Latam Edition")
+    st.radio(
+        "¿El proyecto requiere integración con Validadores Bancarios (EMV - Visa/Mastercard)?",
+        options=["Sí", "No"],
+        key="requiere_emv"
+    )
 
-# --- LÓGICA DE DIAGNÓSTICO EXPERTO ---
-def analyze_project_latam(data, country):
-    report = {
-        "hardware": [],
-        "platform": [],
-        "country_alerts": [], # Alertas específicas por país
-        "blockers": [],
-        "financial_notes": []
+    col1, col2 = st.columns(2)
+    with col1:
+        st.button("⬅ Atrás", on_click=prev_step)
+    with col2:
+        st.button("Analizar y Generar Reporte 🏁", on_click=next_step)
+
+
+# --- PASO 4: RESULTADOS ---
+elif st.session_state.step == 4:
+    st.header("Resultados de Auditoría")
+    
+    # Recopilar datos
+    data_audit = {
+        "cliente": st.session_state.cliente_nombre,
+        "ciudad": st.session_state.ciudad,
+        "flota_total": st.session_state.total_vehiculos,
+        "tipos": st.session_state.tipos_vehiculos,
+        "voltaje": st.session_state.voltaje,
+        "conectividad": st.session_state.conectividad,
+        "tech_tarjeta": st.session_state.tech_tarjeta,
+        "dueno_llaves": st.session_state.dueno_llaves,
+        "requiere_emv": st.session_state.requiere_emv,
+        "puertas_articulado": st.session_state.get('puertas_articulado', 'N/A')
     }
-    
-    ctx = LOCALE_CONFIG[country]
 
-    # 1. ANÁLISIS DE HARDWARE (TELPO)
-    hw_model = "Telpo F6 / T10 Lite" # Base
-    if "Tarjeta Bancaria (cEMV)" in data.get("medios_pago", []):
-        hw_model = "Telpo T20 (Certificado PCI/EMV)"
-    elif "Biometría Facial" in data.get("medios_pago", []):
-        hw_model = "Telpo T20 / F6 (Binocular 3D)"
+    # Ejecutar Análisis
+    riesgos_detectados = analizar_riesgos(data_audit)
     
-    # SAMs Físicas (Hardware Constraint)
-    if data.get("seguridad_sam") == "Cliente entrega SAMs Físicas":
-        report["hardware"].append(f"🔌 **{hw_model}** con ranuras PSAM Físicas habilitadas.")
-        report["country_alerts"].append("⚠️ Verificar compatibilidad de voltaje de la SAM del cliente (3V vs 5V).")
+    # --- Mostrar Semáforos en Pantalla ---
+    if not riesgos_detectados:
+        st.success("✅ No se detectaron riesgos críticos o bloqueantes. El escenario técnico es favorable.")
     else:
-        report["hardware"].append(f"🚌 **{hw_model}** (Configuración estándar).")
+        st.write("### 🚦 Matriz de Riesgos Detectada")
+        for riesgo in riesgos_detectados:
+            if riesgo['nivel'] == "CRITICO":
+                st.error(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
+            elif riesgo['nivel'] == "ALTO":
+                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
+            elif riesgo['nivel'] == "MEDIO":
+                st.warning(f"**{riesgo['titulo']}**: {riesgo['mensaje']}") # Usamos warning para medio tambien
+            else:
+                st.info(f"**{riesgo['titulo']}**: {riesgo['mensaje']}")
 
-    # 2. ANÁLISIS DE PLATAFORMA (MASABI vs PRODATA)
-    # Lógica de Stored Value
-    if data.get("logica_saldo") == "Stored Value (Saldo en Tarjeta)":
-        report["platform"].append("✅ **Recomendado:** Prodata / Desarrollo Propio (Legacy).")
-        report["blockers"].append("⛔ **Masabi Incompatible:** Masabi Justride NO gestiona saldo en chip (Stored Value).")
-    elif data.get("logica_saldo") == "ABT (Saldo en Nube)":
-        report["platform"].append("✅ **Recomendado:** Masabi Justride (SaaS/Cloud).")
-        report["platform"].append("ℹ️ Opción secundaria: Prodata (Modo ABT).")
+    st.markdown("---")
+    st.subheader("Descargas")
 
-    # 3. REGLAS ESPECÍFICAS POR PAÍS (CÓDIGO DURO)
+    # 1. Generar JSON
+    json_str = json.dumps(data_audit, indent=4, ensure_ascii=False)
+    st.download_button(
+        label="📥 Descargar Auditoría (JSON)",
+        data=json_str,
+        file_name=f"auditoria_{st.session_state.cliente_nombre}.json",
+        mime="application/json"
+    )
+
+    # 2. Generar PDF
+    def create_pdf():
+        pdf = PDFReport()
+        pdf.add_page()
+        
+        # Resumen General
+        pdf.chapter_title(f"Resumen Ejecutivo: {data_audit['cliente']}")
+        resumen_texto = (
+            f"Ciudad: {data_audit['ciudad']}\n"
+            f"Flota Total: {data_audit['flota_total']} unidades\n"
+            f"Tipos de Vehículos: {', '.join(data_audit['tipos'])}\n"
+            f"Tecnología Actual: {data_audit['tech_tarjeta']}\n"
+            f"Conectividad: {data_audit['conectividad']}"
+        )
+        pdf.chapter_body(resumen_texto)
+        
+        # Riesgos
+        pdf.ln(5)
+        pdf.chapter_title("Análisis de Riesgos y Recomendaciones")
+        
+        if not riesgos_detectados:
+            pdf.chapter_body("No se detectaron riesgos técnicos bloqueantes para la implementación.")
+        else:
+            for r in riesgos_detectados:
+                pdf.add_risk_box(r['nivel'], r['titulo'], r['mensaje'])
+                
+        return pdf.output(dest='S').encode('latin-1')
+
+    # Botón PDF
+    pdf_bytes = create_pdf()
+    st.download_button(
+        label="📄 Descargar Reporte Técnico (PDF)",
+        data=pdf_bytes,
+        file_name=f"reporte_tecnico_{st.session_state.cliente_nombre}.pdf",
+        mime="application/pdf"
+    )
     
-    # PANAMÁ 🇵🇦
-    if country == "Panamá":
-        if "Tarjeta Bancaria (cEMV)" not in data.get("medios_pago", []):
-            report["country_alerts"].append("🇵🇦 **CRÍTICO:** Panamá tiene alta penetración de pagos Open Loop (Metro). ¿Seguro que no requieren lectura de Visa/Mastercard? Esto podría descalificarnos.")
-        if data.get("logica_saldo") == "Stored Value (Saldo en Tarjeta)":
-            report["country_alerts"].append("🇵🇦 **Observación:** Aunque MetroBus usa Stored Value, la tendencia en Panamá es ir hacia ABT completo. Sugerir migración.")
-
-    # ECUADOR 🇪🇨
-    if country == "Ecuador":
-        if "Quito" in data.get("cliente", "") or "Metro" in data.get("cliente", ""):
-            if data.get("logica_saldo") != "ABT (Saldo en Nube)":
-                report["country_alerts"].append("🇪🇨 **Alerta Quito:** El Metro de Quito opera nativamente con ABT (Cuenta Ciudadana). Ofrecer Stored Value aquí es un retroceso tecnológico.")
-    
-    # MÉXICO 🇲🇽
-    if country == "México":
-        if "Tarjeta Ciudad" in str(data.get("medios_pago", [])):
-            report["country_alerts"].append("🇲🇽 **Estándar Calypso:** La Tarjeta MI usa Calypso. Validar que el Telpo T20 incluya la licencia del stack Calypso o la SAM de Semovi.")
-
-    # CHILE 🇨🇱
-    if country == "Chile":
-        if "Santiago" in data.get("cliente", "") or "RED" in data.get("cliente", ""):
-            report["country_alerts"].append("🇨🇱 **Certificación DTPM:** Cualquier validador en Santiago requiere pasar pruebas de laboratorio DTPM (Complejidad Alta).")
-
-    # 4. INFRAESTRUCTURA & COSTOS
-    if data.get("hosting") == "On-Premise (Servidores Propios)":
-        report["financial_notes"].append("💰 CAPEX Alto: Servidores Físicos.")
-        if "Masabi" in str(report["platform"]):
-            report["blockers"].append("⛔ **Masabi:** No instala On-Premise. Conflicto de arquitectura.")
-    else:
-        report["financial_notes"].append(f"☁️ OPEX: Cobro mensual recurrente en {ctx['currency']} o USD.")
-
-    return report
-
-# --- INTERFAZ DE FORMULARIO ---
-
-st.title(f"Levantamiento AFC - {st.session_state.country}")
-st.markdown(f'<span class="country-tag">{st.session_state.country}</span>', unsafe_allow_html=True)
-st.markdown("---")
-
-with st.form("latam_form"):
-    
-    # SECCIÓN 1: CLIENTE
-    st.markdown('<div class="header-style">1. Perfil del Proyecto</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.session_state.data["cliente"] = st.text_input("Nombre Cliente / Licitación:")
-        st.session_state.data["flota"] = st.number_input("Cantidad de Vehículos/Torniquetes:", min_value=1)
-    with c2:
-        st.session_state.data["tipo_transporte"] = st.selectbox("Modalidad:", ["Bus Urbano", "Bus Interprovincial", "Metro/Tren", "Teleférico"])
-        st.session_state.data["hosting"] = st.radio("Infraestructura:", ["SaaS (Nube)", "On-Premise (Servidores Propios)"])
-
-    # SECCIÓN 2: TECNOLOGÍA DE ACCESO (CORE)
-    st.markdown('<div class="header-style">2. Medios de Acceso y Lógica</div>', unsafe_allow_html=True)
-    
-    # Medios de Pago
-    opciones_pago = [
-        "Tarjeta Propietaria/Ciudad", 
-        "Tarjeta Bancaria (cEMV)", 
-        "Código QR (App)", 
-        "Código QR (Papel)", 
-        "Biometría Facial"
-    ]
-    st.session_state.data["medios_pago"] = st.multiselect("¿Qué debe leer el validador?", opciones_pago)
-    
-    # Lógica de Saldo (Pregunta del Millón)
-    st.markdown("#### 🧠 ¿Dónde vive el dinero?")
-    st.session_state.data["logica_saldo"] = st.radio("Arquitectura de Saldo:", 
-        ["Stored Value (Saldo en Tarjeta)", "ABT (Saldo en Nube)"],
-        help="Stored Value = Tarjeta clásica. ABT = Sistema moderno (Masabi).")
-
-    # Seguridad
-    st.markdown("#### 🔐 Gestión de Llaves (SAM)")
-    st.session_state.data["seguridad_sam"] = st.selectbox("Autenticación de Tarjetas:", 
-        ["Nosotros generamos el mapa (SDK Telpo)", "Cliente entrega SAMs Físicas", "Lectura de UID (Sin seguridad)"])
-
-    # SECCIÓN 3: SERVICIOS PERIFÉRICOS
-    st.markdown('<div class="header-style">3. Ecosistema Comercial</div>', unsafe_allow_html=True)
-    c3, c4 = st.columns(2)
-    with c3:
-        st.session_state.data["retail_pos"] = st.checkbox("¿Requiere POS de Recarga (Telpo TPS900)?")
-    with c4:
-        st.session_state.data["mesa_ayuda"] = st.checkbox("¿Requiere Mesa de Ayuda a Pasajeros?")
-
-    submitted = st.form_submit_button("Generar Diagnóstico Experto")
-
-# --- VISUALIZACIÓN DE RESULTADOS ---
-
-if submitted:
-    analisis = analyze_project_latam(st.session_state.data, st.session_state.country)
-    
-    st.divider()
-    st.header("📊 Diagnóstico Preliminar")
-    
-    # 1. ALERTAS CRÍTICAS (BLOCKERS)
-    if analisis["blockers"]:
-        st.subheader("⛔ Bloqueos de Arquitectura")
-        for err in analisis["blockers"]:
-            st.markdown(f'<div class="critical-box">{err}</div>', unsafe_allow_html=True)
-
-    # 2. ALERTAS PAÍS (NUEVO)
-    if analisis["country_alerts"]:
-        st.subheader(f"🌍 Alertas Específicas: {st.session_state.country}")
-        for alert in analisis["country_alerts"]:
-            st.markdown(f'<div class="info-box">{alert}</div>', unsafe_allow_html=True)
-
-    # 3. RECOMENDACIONES
-    col_a, col_b = st.columns(2)
-    
-    with col_a:
-        st.subheader("🛠️ Hardware Sugerido")
-        for h in analisis["hardware"]:
-            st.markdown(h)
-        if st.session_state.data["retail_pos"]:
-            st.markdown("- 🏪 **POS:** Telpo TPS900 (Android) para red de carga.")
-
-    with col_b:
-        st.subheader("☁️ Plataforma")
-        for p in analisis["platform"]:
-            st.markdown(p)
-    
-    # 4. JSON
-    with st.expander("Ver Datos Crudos (Para Copiar a Correo)"):
-        st.json(st.session_state.data)
+    st.button("🔄 Nueva Auditoría", on_click=lambda: st.session_state.update(step=1))
